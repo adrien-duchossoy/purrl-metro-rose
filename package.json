@@ -1,0 +1,15 @@
+{
+  "name": "purrl-metro",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "vite": "^6.3.0"
+  },
+  "dependencies": {
+    "three": "^0.180.0"
+  }
+}
