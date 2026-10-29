@@ -10,6 +10,7 @@
     "vite": "^6.3.0"
   },
   "dependencies": {
+    "lil-gui": "^0.20.0",
     "three": "^0.180.0"
   }
 }

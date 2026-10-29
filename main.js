@@ -10,7 +10,7 @@ const test = new URLSearchParams(location.search)
 
 const SETTLE_MS = 900 // retour de la caméra au centre
 const FADE_MS = 1000 // fondu entre les deux scènes, même durée que dans le CSS
-const ROTATE_MS = 7000 // rotation vers la voie
+const ROTATE_MS = 7000 // rotation vers la voie (elle commence pendant l'arrivée du train, voir rame.js)
 
 // Le bouton apparaît une fois entré sur le quai
 $('startBtn').addEventListener('click', () => btn.classList.remove('hidden'))
@@ -19,7 +19,25 @@ scene2.ready.then(() => {
   scene2.show(scene1.crop, scene1.fogLevel) // premier rendu, invisible : la carte graphique prépare les textures
   btn.disabled = false
   btn.textContent = 'Le métro arrive'
+  if (test.has('rame')) direct()
 })
+
+// Test : ?rame ouvre directement la scène 2 face à la voie, avec le panneau de réglages de la rame
+function direct() {
+  for (const id of ['start', 'gl2']) $(id).style.transition = 'none' // arrivée directe, sans fondu
+  $('start').classList.add('hidden')
+  $('toggle').classList.add('hidden')
+  scene1.stop()
+  // ?rame&debut : au départ de la rotation, train encore dans le tunnel (pour « Rejouer la séquence »)
+  const debut = test.has('debut')
+  scene2.setRotation(debut ? 0 : 1)
+  scene2.setArrivee(debut ? 0 : 1)
+  scene2.start()
+  $('gl2').classList.add('visible')
+  scene2.showGui()
+  if (test.has('jouer')) scene2.sequence().then(scene2.portesAuGeste) // ?rame&debut&jouer : lance la séquence seule
+  else scene2.portesAuGeste()
+}
 
 // Au survol du bouton, la caméra se place déjà au centre, comme au départ de la 3D :
 // au clic, il n'y a plus de recalage visible
@@ -42,7 +60,9 @@ btn.addEventListener('click', async () => {
   scene1.stop()
   if (test.has('pause')) return // test : ?pause garde la scène 2 au départ, pour la comparer à la scène 1
 
-  await scene2.rotate(ROTATE_MS)
+  await scene2.sequence(ROTATE_MS) // le train arrive, puis la caméra tourne vers lui
+  scene2.showGui()
   btn.textContent = 'Revoir'
   btn.classList.remove('hidden')
+  scene2.portesAuGeste()
 })

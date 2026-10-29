@@ -64,6 +64,14 @@
       border-radius: 8px; padding: 6px 10px;
     }
     #status { margin-top: 8px; color: var(--ink-dim); font-size: 12px; }
+    /* Panneau lil-gui de la scène 2, aux couleurs du panneau de la scène 1 */
+    .lil-gui.root {
+      --background-color: oklch(0.2 0.03 350 / 0.78); --widget-color: oklch(1 0 0 / 0.1); --hover-color: oklch(1 0 0 / 0.16);
+      --focus-color: oklch(1 0 0 / 0.22); --number-color: var(--accent); --string-color: var(--ink-dim);
+      --title-background-color: oklch(0.26 0.04 350 / 0.9); --font-family: ui-sans-serif, system-ui, sans-serif;
+      --width: min(300px, calc(100vw - 24px)); top: 12px; right: 12px; border-radius: 12px; overflow: hidden;
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); max-height: calc(100vh - 24px); overflow-y: auto;
+    }
     #toggle {
       position: fixed; right: 12px; bottom: 12px; z-index: 2; font: inherit; color: var(--ink);
       background: var(--veil); border: 1px solid oklch(1 0 0 / 0.18); border-radius: 999px; padding: 8px 12px;
@@ -93,7 +101,7 @@
     <label><span>Douceur</span><span id="vSmooth"></span><input id="smooth" type="range" min="0.01" max="0.3" step="0.01" value="0.19"></label>
     <label><span>Sensibilité gyro</span><span id="vGyro"></span><input id="gyro" type="range" min="5" max="45" step="1" value="26"></label>
     <label><span>Cadrage horizontal</span><span id="vFocusX"></span><input id="focusX" type="range" min="0" max="1" step="0.01" value="0.16"></label>
-    <label><span>Brume</span><span id="vFog"></span><input id="fog" type="range" min="0" max="1.5" step="0.05" value="0.7"></label>
+    <label><span>Brume</span><span id="vFog"></span><input id="fog" type="range" min="0" max="1.5" step="0.05" value="0.5"></label>
     <div class="row">
       <button id="showDepth">Voir la depth</button>
       <button id="recenter">Recentrer</button>
