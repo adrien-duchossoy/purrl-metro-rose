@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import GUI from 'lil-gui'
 import { FOG_GLSL } from './fog.js'
 import * as rame from './rame.js'
-import { ecarter } from './gestes.js'
+import { ecarter, avancer } from './gestes.js'
 import * as brume3d from './brume3d.js'
 
 // Scène 2 : la station en 3D, avec les images cuites par survey/scene2/bake_tex.py.
@@ -32,6 +32,11 @@ const qEnd = new THREE.Quaternion()
 // Cadrage de départ : la partie de la photo que la scène 1 montre à l'écran
 let from = { w: 1, h: 1, cx: 0.5 }
 let k = 0 // avancement de la rotation, de 0 à 1
+// Entrée dans la rame, de 0 (sur le quai) à 1 (au milieu de la rame) : la caméra suit `dans`, qui rejoint
+// en douceur `dansCible`, pilotée par le geste (avancerAuGeste)
+let dans = 0, dansCible = 0
+const camFin = new THREE.Vector3()
+let camFinPrete = false
 
 // Courbe de la rotation, façon mouvement de caméra de cinéma : départ très progressif, puis un long
 // atterrissage. L'accélération est nulle aux deux bouts (pas d'à-coup) et la vitesse culmine avant
@@ -63,7 +68,45 @@ function apply() {
   const cx = lerp(from.cx, 0.5, e)
   const FW = 10000, FH = FW / FRAME_AR
   camera.setViewOffset(FW, FH, (cx - w / 2) * FW, (0.5 - h / 2) * FH, w * FW, h * FH)
+  if (camFinPrete) {
+    // Deux temps : on avance jusqu'au seuil, puis on tourne vers la gauche pour voir le fond de la rame,
+    // en glissant vers l'axe du tram. Les deux se chevauchent un peu pour que le mouvement reste continu.
+    const doux = (x) => { x = THREE.MathUtils.clamp(x, 0, 1); return x * x * (3 - 2 * x) }
+    const a = doux(dans / PART_AVANCE), t = doux((dans - PART_AVANCE * 0.85) / (1 - PART_AVANCE * 0.85))
+    camera.position.lerpVectors(camHome, camFin, a).lerp(camAxe, t)
+    camera.quaternion.premultiply(_virage.setFromAxisAngle(_haut, VIRAGE * t))
+  }
   camera.updateMatrixWorld()
+}
+
+// Point d'arrivée dans la rame : droit devant, dans l'axe du regard face à la voie (la porte est au centre
+// de l'écran), un peu avant l'axe du tram : avec l'objectif long de la fin de rotation, plus loin on serait
+// collé à la porte d'en face
+const RECUL_FIN = 0.7 // m avant l'axe du tram
+const PART_AVANCE = 0.7 // part du geste pour avancer jusqu'au seuil ; le reste pour tourner vers le fond
+const VIRAGE = THREE.MathUtils.degToRad(90) // vers la gauche
+const camAxe = new THREE.Vector3(), _virage = new THREE.Quaternion(), _haut = new THREE.Vector3(0, 1, 0)
+function preparerEntree() {
+  const b = rame.boite()
+  if (!b) return
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(qEnd).setY(0).normalize()
+  const axe = (b.min.x + b.max.x) / 2
+  if (Math.abs(dir.x) < 1e-3) return
+  camFin.copy(camHome).addScaledVector(dir, (axe - camHome.x) / dir.x - RECUL_FIN)
+  camAxe.copy(camFin).addScaledVector(dir, RECUL_FIN) // pendant le virage, on glisse jusqu'à l'axe du tram
+  camFinPrete = true
+}
+export function setDans(x) { preparerEntree(); dans = dansCible = THREE.MathUtils.clamp(x, 0, 1) }
+
+// Après l'ouverture des portes : pencher le téléphone vers l'avant (ou la molette) fait entrer dans la rame
+let stopAvance = () => {}
+export function avancerAuGeste() {
+  stopAvance()
+  preparerEntree()
+  stopAvance = avancer({
+    actif: () => !view.libre && camFinPrete,
+    onPas: (d) => { dansCible = THREE.MathUtils.clamp(dansCible + d, 0, 1) },
+  })
 }
 
 // ---------- La station ----------
@@ -428,6 +471,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 export async function sequence(ms = 7000) {
   rotation = null
   k = 0
+  stopAvance() // on revient sur le quai
+  dans = dansCible = 0
   rame.setOuverture(0)
   rame.setArrivee(0) // le train attend dans le tunnel que le rideau de brume se forme
   allumage = 'attente'
@@ -444,6 +489,7 @@ let stopGeste = () => {}
 export function portesAuGeste() {
   stopGeste() // une seule écoute à la fois (séquence rejouée depuis le panneau)
   return new Promise((resolve) => {
+    if (rame.params.portes.ouverture >= 1) return resolve() // déjà ouvertes (?ouv=1)
     let depart = null
     const stop = (stopGeste = ecarter({
       actif: () => !view.libre,
@@ -459,7 +505,11 @@ export function portesAuGeste() {
   })
 }
 
+let tickPrec = performance.now()
 const tick = () => {
+  const now = performance.now(), dt = Math.min(0.1, (now - tickPrec) / 1000)
+  tickPrec = now
+  dans += (dansCible - dans) * (1 - Math.exp(-dt * 3)) // amorti : fluide même avec une molette saccadée
   if (rotation) {
     k = Math.min(1, (performance.now() - rotation.t0) / rotation.ms)
     if (k >= 1) { rotation.resolve(); rotation = null }

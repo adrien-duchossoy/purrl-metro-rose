@@ -35,8 +35,9 @@ function direct() {
   scene2.start()
   $('gl2').classList.add('visible')
   scene2.showGui()
-  if (test.has('jouer')) scene2.sequence().then(scene2.portesAuGeste) // ?rame&debut&jouer : lance la séquence seule
-  else scene2.portesAuGeste()
+  if (test.has('dans')) scene2.setDans(Number(test.get('dans'))) // ?rame&ouv=1&dans=0.5 : caméra en route dans la rame
+  if (test.has('jouer')) scene2.sequence().then(scene2.portesAuGeste).then(scene2.avancerAuGeste) // ?rame&debut&jouer : séquence seule
+  else scene2.portesAuGeste().then(scene2.avancerAuGeste)
 }
 
 // Au survol du bouton, la caméra se place déjà au centre, comme au départ de la 3D :
@@ -64,5 +65,5 @@ btn.addEventListener('click', async () => {
   scene2.showGui()
   btn.textContent = 'Revoir'
   btn.classList.remove('hidden')
-  scene2.portesAuGeste()
+  scene2.portesAuGeste().then(scene2.avancerAuGeste) // portes ouvertes : on peut entrer dans la rame
 })
