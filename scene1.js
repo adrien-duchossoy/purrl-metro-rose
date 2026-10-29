@@ -7,7 +7,7 @@
 import { FOG_GLSL } from './fog.js'
 
 const IMAGE_URL = 'decor.jpg'
-const depthUrl = (name) => `/decor_depth_${name}.png`
+const depthUrl = (name) => `decor_depth_${name}.png`
 const query = new URLSearchParams(location.search)
 
 const $ = (id) => document.getElementById(id)

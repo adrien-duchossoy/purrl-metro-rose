@@ -75,7 +75,7 @@ const manager = new THREE.LoadingManager()
 const texLoader = new THREE.TextureLoader(manager)
 
 // Profondeur de la scène 1 telle qu'affichée (fond + lustres) : la brume s'y cache au départ comme en scène 1
-const depth1 = texLoader.load('/scene1_depth.png')
+const depth1 = texLoader.load('scene1_depth.png')
 depth1.minFilter = THREE.LinearFilter
 depth1.generateMipmaps = false
 
