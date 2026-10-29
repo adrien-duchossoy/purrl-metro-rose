@@ -36,6 +36,7 @@ export const params = {
     hauteur: 50, // en degrés au-dessus de l'horizon
     phares: 10, // intensité des feux avant et arrière
     glare: 1, // éblouissement des phares dans l'objectif (halo, traînée, étoile)
+    clarte: 1.3, // éclaircit toute la carrosserie (1 : lumière de la station seule)
     exposition: 1, // tone mapping Neutral du métro (garde les couleurs) : plus haut, plus lumineux
   },
 }
@@ -49,6 +50,7 @@ const NB_OUV = 8
 const bordOuv = {
   uOuv: { value: Array.from({ length: NB_OUV }, () => new THREE.Vector4(0, 0, -9, -9)) },
   uVersTram: { value: new THREE.Matrix4() },
+  uClarte: { value: params.lumieres.clarte },
 }
 let lit = [] // matériaux qui portent les feux, pour régler leur intensité
 const aoMats = [] // matériaux qui ont l'ambient occlusion du modèle
@@ -275,8 +277,15 @@ function bordCaisse(m) {
       '#include <begin_vertex>\nvTram = (uVersTram * modelMatrix * vec4(transformed, 1.0)).xyz;')
     s.fragmentShader = `varying vec3 vTram;
       uniform vec4 uOuv[${NB_OUV}];
+      uniform float uClarte;
       float rectArrondi(vec2 p, vec2 b, float r) { vec2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
       ` + s.fragmentShader.replace('#include <aomap_fragment>', `#include <aomap_fragment>
+      // Carrosserie plus claire que ce que donne la station seule
+      reflectedLight.indirectDiffuse *= uClarte;
+      reflectedLight.indirectSpecular *= uClarte;
+      #ifdef USE_CLEARCOAT
+        clearcoatSpecularIndirect *= uClarte;
+      #endif
       if (vTram.z > 0.5) {
         float d = 1e3;
         for (int i = 0; i < ${NB_OUV}; i++) {
@@ -579,6 +588,7 @@ export function update() {
   for (const m of lit) m.emissiveIntensity = l.phares
   for (const m of aoMats) m.aoMapIntensity = l.ao
   refletVitre.envMapIntensity = l.vitres
+  bordOuv.uClarte.value = l.clarte
 }
 
 // Arrivée jouée en entier : le train sort du tunnel puis freine jusqu'à l'arrêt.
@@ -634,6 +644,7 @@ export function addGui(gui) {
   e.add(params.lumieres, 'exposition', 0.2, 3, 0.05).name('Exposition métro')
   e.add(params.lumieres, 'ao', 0, 2, 0.05).name('Ombres dans les creux (AO)').onChange(update)
   e.add(params.lumieres, 'vitres', 0, 6, 0.05).name('Reflets des vitres').onChange(update)
+  e.add(params.lumieres, 'clarte', 0.5, 2.5, 0.05).name('Clarté de la carrosserie').onChange(update)
 
   const l = gui.addFolder('Lumières directes')
   l.close()
