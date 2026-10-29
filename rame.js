@@ -601,7 +601,7 @@ export function jouer() {
   return new Promise((resolve) => {
     const pas = (now) => {
       if (lecture !== debut) return resolve() // une autre lecture a pris le relais
-      const t = (now - debut) / 1000
+      const t = Math.max(0, now - debut) / 1000 // l'horodatage de l'image peut précéder le départ
       params.arrivee.avancee = avanceeA(t)
       update()
       if (t < dureeArrivee()) requestAnimationFrame(pas)

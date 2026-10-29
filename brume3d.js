@@ -16,7 +16,9 @@ export const params = {
   etirement: 1, // les nappes rapides s'étirent dans le sens de leur mouvement
   echelle: 0.3, // finesse du motif de la brume (plus grand : volutes plus petites)
   emission: 1.2, // nappes par seconde qui sortent du tunnel au repos
-  rideau: 150, // nappes déjà posées devant le tunnel avant l'arrivée : le train sort du mur à travers elles
+  rideau: 150, // nappes poussées hors du tunnel par l'air que chasse le train, juste avant qu'il sorte
+  montee: 1.5, // secondes pendant lesquelles l'air chassé sort du tunnel ; le train attend ce temps
+  piston: 10, // m/s : vitesse de la brume chassée du tunnel, au plus fort, juste avant le train
   rideauFlux: 20, // nappes par seconde ajoutées au rideau tant que le train est dans le tunnel
   bouffee: 220, // nappes expulsées du tunnel par le nez du train
   apres: 6, // nappes par seconde qui sortent encore du tunnel juste après le passage du train
@@ -55,13 +57,16 @@ function spawn(x, y, z, vx = 0, vy = 0, vz = 0, agit = 0) {
   p.scale = rnd(0.6, 1.4)
   p.age = 0
   p.maxAge = rnd(50, 75)
+  p.fondu = 2.5 // secondes d'apparition en fondu
   return p
 }
-// Rideau de brume devant la bouche du tunnel, presque immobile. `posee` : déjà visible (sans fondu d'apparition)
-function rideau(posee) {
-  const p = spawn(rnd(TUNNEL.x[0] - 1, TUNNEL.x[1] + 1), rnd(-0.8, TUNNEL.y[1] + 0.5), rnd(-4, -0.3))
-  p.drift.set(rnd(-0.05, 0.05), rnd(0, 0.03), -rnd(0.05, 0.25))
-  if (posee) p.age = rnd(3, 15)
+// Effet piston : le train pousse l'air du tunnel devant lui. La brume naît au fond du tunnel, derrière le mur,
+// et en est chassée vers le quai, d'autant plus vite que le train approche (`force` de 0 à 1).
+// Elle ralentit ensuite seule (voir `calme`) et le train sort à travers elle.
+function rideau(force) {
+  const p = spawn(rnd(TUNNEL.x[0], TUNNEL.x[1]), rnd(-0.8, TUNNEL.y[1]), rnd(2, 8),
+    rnd(-0.4, 0.4), rnd(0, 0.4), -params.piston * rnd(0.6, 1) * (0.4 + 0.6 * force), 0.6)
+  p.fondu = 0.5 // dans l'obscurité du tunnel : elle apparaît vite
 }
 const sortieTunnel = () => [rnd(...TUNNEL.x), rnd(TUNNEL.y[0], TUNNEL.y[1]), rnd(1, 5)]
 
@@ -228,7 +233,7 @@ export function setSize(w, h) {
 
 let emis = 0 // nappes à faire naître (fraction cumulée)
 let emisRideau = 0
-let rideauPose = false // le rideau est posé pour ce passage du train
+let rideauEmis = 0 // nappes du rideau déjà lancées pour ce passage du train
 let trainee = 0 // 1 juste après le passage du train, puis redescend : le tunnel continue de souffler
 const prevCentre = new THREE.Vector3()
 let hasPrev = false
@@ -267,13 +272,13 @@ export function update(dt, time, box) {
     if (nose > -14) emis += (params.bouffee / 1.5) * dt * Math.min(1, s / 8)
     else if (tail > 0) emis += 25 * dt
   }
-  // Tant que le train est dans le tunnel (nez derrière le mur), un rideau épais l'attend devant la bouche
+  // Tant que le train est dans le tunnel (nez derrière le mur), l'air qu'il pousse chasse la brume du tunnel :
+  // de plus en plus de nappes, de plus en plus vite, pendant `montee` secondes ; ensuite un flux plus calme
   if (box && box.min.z > -0.3) {
-    if (!rideauPose) for (let i = 0; i < params.rideau; i++) rideau(true)
-    rideauPose = true
-    emisRideau += params.rideauFlux * dt
-    while (emisRideau >= 1) { emisRideau -= 1; rideau(false) }
-  } else if (box) rideauPose = false // sorti : au prochain passage, on reposera un rideau
+    const force = Math.min(1, rideauEmis / Math.max(1, params.rideau))
+    emisRideau += (force < 1 ? (2 * params.rideau / params.montee) * Math.max(0.05, Math.sqrt(force)) : params.rideauFlux) * dt
+    while (emisRideau >= 1) { emisRideau -= 1; rideauEmis++; rideau(force) }
+  } else if (box) rideauEmis = 0 // sorti : au prochain passage, l'air chassera de nouveau la brume
   while (emis >= 1) {
     emis -= 1
     if (box && s > 0.5 && nose > -14) {
@@ -353,7 +358,7 @@ export function update(dt, time, box) {
     if (P.z < LIMITES.z[0]) p.age = Math.max(p.age, p.maxAge - 3) // sortie de la station : elle s'efface
 
     // Apparition et disparition en fondu ; elle s'étale un peu en vieillissant
-    const alpha = Math.min(1, p.age / 2.5) * Math.min(1, (p.maxAge - p.age) / 6)
+    const alpha = Math.min(1, p.age / p.fondu) * Math.min(1, (p.maxAge - p.age) / 6)
     aPos.setXYZ(i, P.x, P.y, P.z)
     aVel.setXYZ(i, V.x, V.y, V.z)
     aData.setXYZW(i, params.taille * p.scale * (1 + 0.5 * p.age / p.maxAge), p.angle, p.seed, alpha)
@@ -383,6 +388,8 @@ export function addGui(gui) {
   f.add(params, 'etirement', 0, 3, 0.05).name('Étirement au souffle')
   f.add(params, 'emission', 0, 5, 0.1).name('Sortie du tunnel (/s)')
   f.add(params, 'rideau', 0, 300, 1).name('Rideau avant le train')
+  f.add(params, 'montee', 0, 5, 0.1).name('Rideau, montée (s)')
+  f.add(params, 'piston', 0, 20, 0.5).name('Rideau, vitesse (m/s)')
   f.add(params, 'rideauFlux', 0, 60, 1).name('Rideau, flux (/s)')
   f.add(params, 'bouffee', 0, 250, 1).name('Bouffée du train')
   f.add(params, 'apres', 0, 20, 0.5).name('Flux après le train (/s)')

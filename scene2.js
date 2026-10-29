@@ -362,13 +362,15 @@ export function rotate(ms) {
   return new Promise((resolve) => { rotation = { t0: performance.now(), ms, resolve } })
 }
 
-// Séquence complète : le train sort du tunnel et freine ; la caméra tourne pendant le freinage
-// et s'arrête en même temps que lui. Le petit recul de la caisse vient ensuite, caméra immobile.
+// Séquence complète : la brume se forme devant le tunnel, puis le train en sort et freine ; la caméra tourne
+// pendant le freinage et s'arrête en même temps que lui. Le petit recul de la caisse vient ensuite, caméra immobile.
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 export async function sequence(ms = 7000) {
   rotation = null
   k = 0
   rame.setOuverture(0)
+  rame.setArrivee(0) // le train attend dans le tunnel que le rideau de brume se forme
+  await wait(brume3d.params.montee * 1000)
   const arret = rame.jouer()
   await wait(Math.max(0, rame.dureeFreinage() * 1000 - ms))
   await Promise.all([rotate(ms), arret])
