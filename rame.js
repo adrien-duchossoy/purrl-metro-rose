@@ -39,6 +39,7 @@ export const params = {
     clarte: 1.3, // éclaircit toute la carrosserie (1 : lumière de la station seule)
     plafonniers: 3, // éclat des deux rangées de lampes au plafond de la rame
     interieur: 1.6, // clarté de l'intérieur de la rame, éclairé par ses lampes (1 : lumière de la station seule)
+    aoInterieur: 0.5, // ombre cuite de l'intérieur : à pleine force, ses zones fausses font des taches noires
     exposition: 1, // tone mapping Neutral du métro (garde les couleurs) : plus haut, plus lumineux
   },
 }
@@ -200,7 +201,7 @@ const BAS_DE_CAISSE = [ // en coordonnées 0 à 1 depuis le haut : u max, v min,
   [0.62, 0, 0.036], [0.718, 0.193, 0.228], [0.458, 0.389, 0.423],
 ]
 function basDeCaisse(image) {
-  const N = N_CADRE, { c, g } = canevas(N, image), d = g.getImageData(0, 0, N, N), p = d.data
+  const N = image.width, { c, g } = canevas(N, image), d = g.getImageData(0, 0, N, N), p = d.data // pleine résolution
   for (const [u1, v0, v1] of BAS_DE_CAISSE) {
     for (let y = Math.floor(v0 * N); y < v1 * N; y++) for (let x = 0; x < u1 * N; x++) {
       const i = 4 * (y * N + x), r = p[i], v = p[i + 1], b = p[i + 2]
@@ -217,26 +218,31 @@ function basDeCaisse(image) {
 // Cadres de porte en plastique noir. Dans le fichier, c'est un noir pur (0) sans aucun relief, posé sur
 // une plaque plate : il ne renvoyait que la teinte rose de la station, uniforme. On lui redonne une matière
 // (noir à ~4 %, marbrures, grain) et des arêtes arrondies (normal map). L'ombre du retrait est dans ombreRetrait().
-const N_CADRE = 2048
 function cadres(m, image) {
-  const N = N_CADRE, base = canevas(N, image), d = base.g.getImageData(0, 0, N, N), p = d.data
-  const noir = new Float32Array(N * N)
-  for (let i = 0; i < N * N; i++) noir[i] = estNoir(p[4 * i], p[4 * i + 1], p[4 * i + 2]) ? 1 : 0
-  const marbre = bruitDoux(N, 48), grain = bruitDoux(N, 700)
+  // Couleur en pleine résolution (4096) ; masques, bruit et relief en 2048 au plus : en 4096, leurs tableaux
+  // pèseraient environ 250 Mo au chargement, trop pour un téléphone
+  const N = image.width, M = Math.min(N, 2048), k = N / M
+  const base = canevas(N, image), d = base.g.getImageData(0, 0, N, N), p = d.data
+  const petit = canevas(M, image).g.getImageData(0, 0, M, M).data
+  const noir = new Float32Array(M * M)
+  for (let i = 0; i < M * M; i++) noir[i] = estNoir(petit[4 * i], petit[4 * i + 1], petit[4 * i + 2]) ? 1 : 0
+  const marbre = bruitDoux(M, 48), grain = bruitDoux(M, 700)
   // Couleur : noir plastique un peu chaud, jamais à 0
-  for (let i = 0; i < N * N; i++) {
-    if (!noir[i]) continue
-    const n = 34 + 14 * (marbre[i] - 0.5) + 8 * (grain[i] - 0.5)
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = y * N + x
+    if (!estNoir(p[4 * i], p[4 * i + 1], p[4 * i + 2])) continue
+    const j = ((y / k) | 0) * M + ((x / k) | 0)
+    const n = 34 + 14 * (marbre[j] - 0.5) + 8 * (grain[j] - 0.5)
     p[4 * i] = n + 1; p[4 * i + 1] = n; p[4 * i + 2] = n + 1
   }
   base.g.putImageData(d, 0, 0)
   // Relief : le cadre est une bande bombée, plus haute que la vitre et que la caisse
-  const h = flou(noir, N, 3)
-  const nm = canevas(N, m.normalMap.image), dn = nm.g.getImageData(0, 0, N, N), q = dn.data
+  const h = flou(noir, M, 3)
+  const nm = canevas(M, m.normalMap.image), dn = nm.g.getImageData(0, 0, M, M), q = dn.data
   const FORCE = 3
-  for (let y = 1; y < N - 1; y++) for (let x = 1; x < N - 1; x++) {
-    const i = y * N + x
-    const dx = h[i + 1] - h[i - 1], dy = h[i + N] - h[i - N]
+  for (let y = 1; y < M - 1; y++) for (let x = 1; x < M - 1; x++) {
+    const i = y * M + x
+    const dx = h[i + 1] - h[i - 1], dy = h[i + M] - h[i - M]
     if (dx === 0 && dy === 0) continue
     let nx = q[4 * i] / 127.5 - 1 - dx * FORCE, ny = q[4 * i + 1] / 127.5 - 1 + dy * FORCE, nz = q[4 * i + 2] / 127.5 - 1
     const l = Math.hypot(nx, ny, nz)
@@ -513,7 +519,7 @@ export function load(scene, renderer, manager) {
     const copies = new Set(verre.values())
     const remplace = new Map()
     for (const m of mats) {
-      if (m.map) m.anisotropy = renderer.capabilities.getMaxAnisotropy()
+      if (m.map) m.map.anisotropy = renderer.capabilities.getMaxAnisotropy() // net vu de biais (sièges, sol)
       if (m.transparent && !copies.has(m)) {
         m.transparent = false
         m.depthWrite = true // le chargeur la coupe sur les matériaux transparents
@@ -525,8 +531,8 @@ export function load(scene, renderer, manager) {
       } else if (m.name.startsWith('glink_exterior')) {
         remplace.set(m, peinture(m))
       } else if (m.roughnessMap) {
-        m.aoMap = m.roughnessMap // intérieur : même carte ORM (occlusion dans le rouge)
-        aoMats.push(m)
+        // Intérieur : ombre cuite du fichier (posée d'office par le chargeur glTF), à force réduite : à pleine
+        // force, ses zones fausses noircissaient des pans entiers (dos des sièges, dessous, bas des portes)
         if (m.map?.image) {
           Object.assign(m, { emissiveMap: plafonniers(m.map.image), emissive: new THREE.Color(1, 1, 1) })
           interieurs.push(m)
@@ -633,7 +639,7 @@ export function update() {
   for (const m of aoMats) m.aoMapIntensity = l.ao
   refletVitre.envMapIntensity = l.vitres
   bordOuv.uClarte.value = l.clarte
-  for (const m of interieurs) m.emissiveIntensity = l.plafonniers
+  for (const m of interieurs) { m.emissiveIntensity = l.plafonniers; m.aoMapIntensity = l.aoInterieur }
   uInterieur.value = l.interieur
 }
 
@@ -693,6 +699,7 @@ export function addGui(gui) {
   e.add(params.lumieres, 'clarte', 0.5, 2.5, 0.05).name('Clarté de la carrosserie').onChange(update)
   e.add(params.lumieres, 'plafonniers', 0, 10, 0.1).name('Plafonniers de la rame').onChange(update)
   e.add(params.lumieres, 'interieur', 0.5, 4, 0.05).name('Intérieur éclairé').onChange(update)
+  e.add(params.lumieres, 'aoInterieur', 0, 1, 0.05).name('Ombres de l\'intérieur').onChange(update)
 
   const l = gui.addFolder('Lumières directes')
   l.close()
