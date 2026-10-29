@@ -37,6 +37,8 @@ export const params = {
     phares: 10, // intensité des feux avant et arrière
     glare: 1, // éblouissement des phares dans l'objectif (halo, traînée, étoile)
     clarte: 1.3, // éclaircit toute la carrosserie (1 : lumière de la station seule)
+    plafonniers: 3, // éclat des deux rangées de lampes au plafond de la rame
+    interieur: 1.6, // clarté de l'intérieur de la rame, éclairé par ses lampes (1 : lumière de la station seule)
     exposition: 1, // tone mapping Neutral du métro (garde les couleurs) : plus haut, plus lumineux
   },
 }
@@ -55,6 +57,18 @@ const bordOuv = {
 let lit = [] // matériaux qui portent les feux, pour régler leur intensité
 let eclat = 1 // allumage des feux (0 à 1), piloté par la séquence d'arrivée
 const aoMats = [] // matériaux qui ont l'ambient occlusion du modèle
+const interieurs = [] // matériaux de l'intérieur de la rame
+// Avec scene.environment, Three.js ignore envMapIntensity du matériau : la clarté de l'intérieur passe par le shader
+const uInterieur = { value: params.lumieres.interieur }
+function eclairerInterieur(m) {
+  m.onBeforeCompile = (s) => {
+    s.uniforms.uInterieur = uInterieur
+    s.fragmentShader = 'uniform float uInterieur;\n' + s.fragmentShader.replace('#include <aomap_fragment>', `#include <aomap_fragment>
+      reflectedLight.indirectDiffuse *= uInterieur;
+      reflectedLight.indirectSpecular *= uInterieur;`)
+  }
+  m.customProgramCacheKey = () => 'interieur'
+}
 let demiLongueur = 0 // demi-longueur du tram, avant mise à l'échelle
 let boiteLocale = null // boîte du tram dans son propre repère
 let cameraZ = null // position de la caméra le long du quai : le centre de l'écran, en fin de rotation, vise ce z
@@ -158,6 +172,25 @@ function texture(c, srgb) {
   if (srgb) t.colorSpace = THREE.SRGBColorSpace
   t.anisotropy = 8 // net de biais, comme les textures d'origine
   return t
+}
+
+// Plafonniers : au plafond de la rame, deux rangées de lampes de chaque côté, peintes en blanc dans la texture
+// intérieure (zones ci-dessous). On les fait briller : carte d'émission avec seulement ces pixels presque blancs
+// (le rose du plafond est plus sombre dans le vert).
+const PLAFOND = [ // en coordonnées 0 à 1 depuis le haut : u min, u max, v min, v max
+  [0.14, 0.25, 0.0, 0.34], [0.69, 0.99, 0.29, 0.39],
+]
+function plafonniers(image) {
+  const N = 1024, { c, g } = canevas(N, image), d = g.getImageData(0, 0, N, N), p = d.data
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = 4 * (y * N + x), u = x / N, v = y / N
+    const lampe = PLAFOND.some(([u0, u1, v0, v1]) => u > u0 && u < u1 && v > v0 && v < v1) &&
+      p[i] > 240 && p[i + 1] > 228 && p[i + 2] > 225
+    const k = lampe ? 255 : 0
+    p[i] = k; p[i + 1] = k * 0.97; p[i + 2] = k * 0.92; p[i + 3] = 255 // blanc à peine chaud
+  }
+  g.putImageData(d, 0, 0)
+  return texture(c, true)
 }
 
 // Bas de caisse : dans la texture (rangée à l'envers), c'est la bande grise en haut de chaque rangée de
@@ -494,10 +527,15 @@ export function load(scene, renderer, manager) {
       } else if (m.roughnessMap) {
         m.aoMap = m.roughnessMap // intérieur : même carte ORM (occlusion dans le rouge)
         aoMats.push(m)
+        if (m.map?.image) {
+          Object.assign(m, { emissiveMap: plafonniers(m.map.image), emissive: new THREE.Color(1, 1, 1) })
+          interieurs.push(m)
+          eclairerInterieur(m)
+        }
       }
     }
     gltf.scene.traverse((o) => { if (o.isMesh && remplace.has(o.material)) o.material = remplace.get(o.material) })
-    for (const m of new Set([...mats].map((m) => remplace.get(m) || m))) if (m.emissiveMap) lit.push(m)
+    for (const m of new Set([...mats].map((m) => remplace.get(m) || m))) if (m.emissiveMap && !interieurs.includes(m)) lit.push(m) // les feux, pas les plafonniers
     // Portes côté quai : les battants (et leurs vitres) sont posés à l'axe de la porte, côté +z.
     // Le centre de leur géométrie dit de quel côté ils coulissent.
     gltf.scene.updateMatrixWorld(true)
@@ -595,6 +633,8 @@ export function update() {
   for (const m of aoMats) m.aoMapIntensity = l.ao
   refletVitre.envMapIntensity = l.vitres
   bordOuv.uClarte.value = l.clarte
+  for (const m of interieurs) m.emissiveIntensity = l.plafonniers
+  uInterieur.value = l.interieur
 }
 
 // Arrivée jouée en entier : le train sort du tunnel puis freine jusqu'à l'arrêt.
@@ -651,6 +691,8 @@ export function addGui(gui) {
   e.add(params.lumieres, 'ao', 0, 2, 0.05).name('Ombres dans les creux (AO)').onChange(update)
   e.add(params.lumieres, 'vitres', 0, 6, 0.05).name('Reflets des vitres').onChange(update)
   e.add(params.lumieres, 'clarte', 0.5, 2.5, 0.05).name('Clarté de la carrosserie').onChange(update)
+  e.add(params.lumieres, 'plafonniers', 0, 10, 0.1).name('Plafonniers de la rame').onChange(update)
+  e.add(params.lumieres, 'interieur', 0.5, 4, 0.05).name('Intérieur éclairé').onChange(update)
 
   const l = gui.addFolder('Lumières directes')
   l.close()
