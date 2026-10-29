@@ -16,11 +16,11 @@ export const params = {
   etirement: 1, // les nappes rapides s'étirent dans le sens de leur mouvement
   echelle: 0.3, // finesse du motif de la brume (plus grand : volutes plus petites)
   emission: 1.2, // nappes par seconde qui sortent du tunnel au repos
-  rideau: 150, // nappes poussées hors du tunnel par l'air que chasse le train, juste avant qu'il sorte
+  rideau: 90, // nappes poussées hors du tunnel par l'air que chasse le train, juste avant qu'il sorte
   montee: 1.5, // secondes pendant lesquelles l'air chassé sort du tunnel ; le train attend ce temps
   piston: 10, // m/s : vitesse de la brume chassée du tunnel, au plus fort, juste avant le train
   rideauFlux: 20, // nappes par seconde ajoutées au rideau tant que le train est dans le tunnel
-  bouffee: 220, // nappes expulsées du tunnel par le nez du train
+  bouffee: 140, // nappes expulsées du tunnel par le nez du train
   apres: 6, // nappes par seconde qui sortent encore du tunnel juste après le passage du train
   apresDuree: 15, // secondes pour que ce flux redescende au niveau du repos
   souffle: 1, // force de la poussée du train
@@ -29,7 +29,7 @@ export const params = {
   paillettes: 1, // éclat des paillettes accrochées aux nappes
 }
 
-const N = 420 // nappes au plus en même temps
+const N = 300 // nappes au plus en même temps (chacune coûte cher à dessiner : elles se recouvrent)
 const TUNNEL = { x: [-2, 4.3], y: [-0.8, 3.2] } // bouche du tunnel, dans le mur du fond (z = 0)
 const LIMITES = { x: [-8.5, 11.5], y: [-0.8, 6.5], z: [-70, -0.3] } // la station (le tunnel va au-delà de z = 0)
 
@@ -67,6 +67,7 @@ function rideau(force) {
   const p = spawn(rnd(TUNNEL.x[0], TUNNEL.x[1]), rnd(-0.8, TUNNEL.y[1]), rnd(2, 8),
     rnd(-0.4, 0.4), rnd(0, 0.4), -params.piston * rnd(0.6, 1) * (0.4 + 0.6 * force), 0.6)
   p.fondu = 0.5 // dans l'obscurité du tunnel : elle apparaît vite
+  p.scale *= 1.25 // moins de nappes que la bouffée, mais plus grandes : même surface couverte
 }
 const sortieTunnel = () => [rnd(...TUNNEL.x), rnd(TUNNEL.y[0], TUNNEL.y[1]), rnd(1, 5)]
 
@@ -171,7 +172,8 @@ const mat = new THREE.ShaderMaterial({
       // une seule masse de brume, avec des zones épaisses et des trouées qui ne suivent pas leurs bords.
       vec2 q = vUv - 0.5;
       float shape = exp(-dot(q, q) * 9.0) - 0.105; // nulle au bord de la nappe
-      shape = max(shape, 0.0) / 0.895;
+      if (shape <= 0.0) discard; // coin du carré, hors de la nappe : rien à calculer
+      shape /= 0.895;
       vec3 w = vWorld * uScale + vec3(0.0, 0.0, uTime * 0.12);
       float n = fbm3(w);
       float dens = smoothstep(0.28, 0.72, n + 0.12 * fbm3(w * 3.1 + 5.0));
