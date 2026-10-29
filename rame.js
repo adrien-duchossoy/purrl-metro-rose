@@ -449,10 +449,10 @@ export function load(scene, renderer, manager) {
   envScene = scene
   envRenderer = renderer
   const loader = new HDRLoader(manager)
-  loader.load('/scene2/envmap.hdr', (t) => { envMat.uniforms.tFull.value = t; majEnv() })
-  loader.load('/scene2/envmap_base.hdr', (t) => { envMat.uniforms.tBase.value = t; majEnv() })
+  loader.load('scene2/envmap.hdr', (t) => { envMat.uniforms.tFull.value = t; majEnv() })
+  loader.load('scene2/envmap_base.hdr', (t) => { envMat.uniforms.tBase.value = t; majEnv() })
 
-  new GLTFLoader(manager).load(`/scene2/tram.glb?v=${Date.now()}`, (gltf) => {
+  new GLTFLoader(manager).load(`scene2/tram.glb?v=${Date.now()}`, (gltf) => {
     // Transparence : les vitres sont des objets à part ("window") qui ne contiennent que du verre.
     // Elles reçoivent une copie transparente du matériau ; tout le reste est opaque, et les quelques
     // pixels de verre de ses textures deviennent des découpes nettes. Une seule couche transparente

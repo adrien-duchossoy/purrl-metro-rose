@@ -81,14 +81,14 @@ depth1.generateMipmaps = false
 
 export const ready = new Promise((resolve) => {
   manager.onLoad = resolve
-  new GLTFLoader(manager).load(`/scene2/station.glb?v=${v}`, (gltf) => {
+  new GLTFLoader(manager).load(`scene2/station.glb?v=${v}`, (gltf) => {
     gltf.scene.traverse((o) => {
       if (!o.isMesh) return
       // Les textures contiennent déjà toute la lumière : aucun éclairage à calculer
       let map = o.material.map
       const name = BAKED.find((n) => o.name.startsWith(n))
       if (name) {
-        map = texLoader.load(`/scene2/tex/${name}.jpg?v=${v}`)
+        map = texLoader.load(`scene2/tex/${name}.jpg?v=${v}`)
         map.flipY = false // même sens que les textures glTF
       }
       map.colorSpace = THREE.SRGBColorSpace

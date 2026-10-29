@@ -6,7 +6,7 @@
 
 import { FOG_GLSL } from './fog.js'
 
-const IMAGE_URL = '/decor.jpg'
+const IMAGE_URL = 'decor.jpg'
 const depthUrl = (name) => `/decor_depth_${name}.png`
 const query = new URLSearchParams(location.search)
 
@@ -357,12 +357,12 @@ for (const [name, unit] of Object.entries(TEX)) gl.uniform1i(u[name], unit)
 Promise.all([
   loadTexture(IMAGE_URL, TEX.uImage),
   loadTexture(depthUrl(isLayered() ? 'moyen' : depthSel.value), TEX.uDepth),
-  loadTexture('/bg.jpg', TEX.uBg),
-  loadTexture('/bg_depth.png', TEX.uBgDepth),
-  loadTexture('/objects.png', TEX.uObj),
-  loadTexture('/objects_depth.png', TEX.uObjDepth),
-  loadTexture('/lamps_atlas.png', TEX.uAtlas),
-  fetch('/lamps.json').then((r) => r.json()).then(({ image: [W, H], atlas: [AW, AH], lamps }) => {
+  loadTexture('bg.jpg', TEX.uBg),
+  loadTexture('bg_depth.png', TEX.uBgDepth),
+  loadTexture('objects.png', TEX.uObj),
+  loadTexture('objects_depth.png', TEX.uObjDepth),
+  loadTexture('lamps_atlas.png', TEX.uAtlas),
+  fetch('lamps.json').then((r) => r.json()).then(({ image: [W, H], atlas: [AW, AH], lamps }) => {
     // Les lustres sont rangés du plus lointain au plus proche : c'est l'ordre d'affichage
     const pad = (arr) => [...arr, ...new Array(16 * 4 - arr.length).fill(0)]
     gl.uniform1fv(u.uDepths, new Float32Array(16).map((_, i) => lamps[i]?.depth ?? 0))
