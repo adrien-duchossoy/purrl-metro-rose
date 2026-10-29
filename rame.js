@@ -53,6 +53,7 @@ const bordOuv = {
   uClarte: { value: params.lumieres.clarte },
 }
 let lit = [] // matériaux qui portent les feux, pour régler leur intensité
+let eclat = 1 // allumage des feux (0 à 1), piloté par la séquence d'arrivée
 const aoMats = [] // matériaux qui ont l'ambient occlusion du modèle
 let demiLongueur = 0 // demi-longueur du tram, avant mise à l'échelle
 let boiteLocale = null // boîte du tram dans son propre repère
@@ -358,6 +359,11 @@ function ombreRetrait(o) {
 // dans le repère du tram : le nez regarde vers +x
 const PHARES = [new THREE.Vector3(22.1, 1.02, -0.95), new THREE.Vector3(22.1, 1.02, 0.95)]
 const AVANT = new THREE.Vector3(1, 0, 0)
+export function setEclat(x) {
+  if (x === eclat) return
+  eclat = x
+  for (const m of lit) m.emissiveIntensity = params.lumieres.phares * eclat
+}
 export function phares() {
   if (!boiteLocale) return null
   group.updateMatrixWorld()
@@ -585,7 +591,7 @@ export function update() {
   const az = THREE.MathUtils.degToRad(l.azimut), el = THREE.MathUtils.degToRad(l.hauteur)
   sun.target.position.copy(group.position)
   sun.position.copy(group.position).add(new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)).multiplyScalar(20))
-  for (const m of lit) m.emissiveIntensity = l.phares
+  for (const m of lit) m.emissiveIntensity = l.phares * eclat
   for (const m of aoMats) m.aoMapIntensity = l.ao
   refletVitre.envMapIntensity = l.vitres
   bordOuv.uClarte.value = l.clarte

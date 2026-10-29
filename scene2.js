@@ -177,7 +177,9 @@ const post = new THREE.ShaderMaterial({
       vec2 q = mat2(0.7071, -0.7071, 0.7071, 0.7071) * d;
       float star = (exp(-abs(q.x) * 500.0) * exp(-abs(q.y) * 14.0) + exp(-abs(q.y) * 500.0) * exp(-abs(q.x) * 14.0)) * 0.35;
       vec3 c = vec3(1.0, 0.95, 0.97) * core + vec3(1.0, 0.84, 0.91) * halo + vec3(0.86, 0.82, 1.0) * streak + vec3(1.0, 0.92, 0.85) * star;
-      return c * L.w * vis;
+      // Dans la brume épaisse, le phare est voilé : même aspect, intensité réduite selon la brume devant lui
+      float voile = mix(1.0, 0.35, clamp(1.5 * texture(tPuffs, L.xy).a, 0.0, 1.0));
+      return c * L.w * vis * voile;
     }
 
     // Tone mapping Neutral (Khronos PBR Neutral, repris de THREE.NeutralToneMapping) : garde les couleurs
@@ -294,11 +296,21 @@ const copyBtn = gui.controllers.at(-1)
 
 export function showGui() { gui.show() }
 
+// Apparition des phares : pendant la séquence, ils restent éteints tant que le train est dans le tunnel,
+// puis montent en douceur dès que son nez passe le mur ('attente' : pas encore sorti ; null : allumés)
+let allumage = null
+const DUREE_ALLUMAGE = 1.5 // secondes
+
 // Position des phares à l'écran pour l'éblouissement : il est d'autant plus fort que le phare regarde la caméra
 const camPos = new THREE.Vector3(), versCam = new THREE.Vector3(), ecran = new THREE.Vector3()
 function majPhares() {
   const ph = rame.phares()
   const u = post.uniforms
+  if (allumage === 'attente' && rame.boite()?.min.z < -0.3) allumage = performance.now()
+  const x = allumage === null ? 1 : allumage === 'attente' ? 0 : Math.min(1, (performance.now() - allumage) / 1000 / DUREE_ALLUMAGE)
+  const eclat = x * x * (3 - 2 * x) // départ et arrivée en douceur
+  if (x >= 1) allumage = null
+  rame.setEclat(eclat)
   u.uAspect.value = innerWidth / innerHeight
   camera.getWorldPosition(camPos)
   for (let i = 0; i < 2; i++) {
@@ -310,7 +322,9 @@ function majPhares() {
     ecran.copy(p).project(camera)
     const prof = -p.clone().applyMatrix4(camera.matrixWorldInverse).z
     if (prof <= 0 || Math.abs(ecran.x) > 1.5 || Math.abs(ecran.y) > 1.5) continue
-    L.set((ecran.x + 1) / 2, (ecran.y + 1) / 2, prof, THREE.MathUtils.smoothstep(face, 0.2, 0.9) * rame.params.lumieres.glare)
+    // De près, l'éblouissement grossit et noie la scène : son intensité baisse quand le train approche
+    const proche = THREE.MathUtils.lerp(0.35, 1, THREE.MathUtils.smoothstep(prof, 5, 40))
+    L.set((ecran.x + 1) / 2, (ecran.y + 1) / 2, prof, THREE.MathUtils.smoothstep(face, 0.2, 0.9) * rame.params.lumieres.glare * eclat * proche)
   }
 }
 
@@ -370,6 +384,7 @@ export async function sequence(ms = 7000) {
   k = 0
   rame.setOuverture(0)
   rame.setArrivee(0) // le train attend dans le tunnel que le rideau de brume se forme
+  allumage = 'attente'
   await wait(brume3d.params.montee * 1000)
   const arret = rame.jouer()
   await wait(Math.max(0, rame.dureeFreinage() * 1000 - ms))
