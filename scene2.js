@@ -18,7 +18,11 @@ const FRAME_AR = 2752 / 1536 // format de la photo de la scène 1
 
 const canvas = document.getElementById('gl2')
 const renderer = new THREE.WebGLRenderer({ canvas })
-renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2))
+// Résolution adaptative : on part de la pleine résolution (2 au plus) et on la baisse par crans si l'appareil
+// ne suit pas (voir adapter()). Tout le rendu est calculé par pixel : c'est le réglage qui pèse le plus.
+const DPR_MAX = Math.min(devicePixelRatio || 1, 2)
+let dpr = DPR_MAX
+renderer.setPixelRatio(dpr)
 
 const scene = new THREE.Scene()
 const camera = new THREE.PerspectiveCamera(50, FRAME_AR, 0.05, 500)
@@ -328,6 +332,46 @@ function majPhares() {
   }
 }
 
+// Baisse la résolution d'un cran quand les images prennent en moyenne plus de 22 ms (moins de 45 par seconde)
+// deux secondes de suite (une seule seconde lente peut venir de la compilation d'un shader).
+// On ne la remonte pas : ça évite qu'elle oscille.
+let adaptT0 = 0, adaptImages = 0, adaptPrec = 0, lentes = 0
+function adapter(now) {
+  const dt = now - adaptPrec
+  adaptPrec = now
+  if (dt > 100) { adaptT0 = now; adaptImages = 0; return } // onglet en arrière-plan, chargement : on ne compte pas
+  adaptImages++
+  if (now - adaptT0 < 1000) return
+  const ms = (now - adaptT0) / adaptImages
+  adaptT0 = now; adaptImages = 0
+  lentes = ms > 22 ? lentes + 1 : 0
+  if (lentes >= 2 && dpr > 1) {
+    lentes = 0
+    dpr = Math.max(1, dpr - 0.25)
+    renderer.setPixelRatio(dpr)
+    resize()
+  }
+}
+
+// ?perf : mesures affichées à l'écran toutes les secondes (lisibles sur iPhone)
+const PERF = new URLSearchParams(location.search).has('perf')
+let perfT0 = 0, perfImages = 0, perfDiv = null
+function perf(now) {
+  const i = renderer.info
+  if (perfImages > 0 && now - perfT0 > 1000) {
+    perfDiv ??= Object.assign(document.body.appendChild(document.createElement('div')), {
+      style: 'position:fixed;left:8px;top:8px;z-index:9;font:12px ui-monospace,monospace;color:#fff;background:#0009;padding:6px 8px;border-radius:6px;white-space:pre',
+    })
+    const ms = (now - perfT0) / perfImages
+    perfDiv.textContent = `${(1000 / ms).toFixed(0)} i/s  ${ms.toFixed(1)} ms\nrésolution ${dpr} (max ${DPR_MAX})\n${i.render.calls} appels  ${(i.render.triangles / 1000).toFixed(0)} k triangles`
+    perfT0 = now; perfImages = 0
+  }
+  if (!perfT0) perfT0 = now
+  perfImages++
+  i.autoReset = false
+  i.reset()
+}
+
 let lastFrame = null
 function render(now = performance.now()) {
   apply()
@@ -341,6 +385,8 @@ function render(now = performance.now()) {
   u.uProjInv.value.copy(camera.projectionMatrixInverse)
   u.uCamWorld.value.copy(camera.matrixWorld)
 
+  adapter(now)
+  if (PERF) perf(now)
   renderer.setRenderTarget(target)
   renderer.render(scene, camera)
   brume3d.update(lastFrame === null ? 0 : Math.min(0.1, (now - lastFrame) / 1000), time, rame.boite())
