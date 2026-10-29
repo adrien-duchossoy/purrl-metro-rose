@@ -491,7 +491,10 @@ export function load(scene, renderer, manager) {
   loader.load('scene2/envmap.hdr', (t) => { envMat.uniforms.tFull.value = t; majEnv() })
   loader.load('scene2/envmap_base.hdr', (t) => { envMat.uniforms.tBase.value = t; majEnv() })
 
-  new GLTFLoader(manager).load(`scene2/tram.glb?v=${Date.now()}`, (gltf) => {
+  // Téléphone : textures en 2048 (1024 pour les cartes techniques). En 4096, Safari iOS dépassait sa mémoire
+  // et fermait la page (« Un problème récurrent est survenu »)
+  const fichier = matchMedia('(pointer: coarse)').matches ? 'tram_mobile' : 'tram'
+  new GLTFLoader(manager).load(`scene2/${fichier}.glb?v=${Date.now()}`, (gltf) => {
     // Transparence : les vitres sont des objets à part ("window") qui ne contiennent que du verre.
     // Elles reçoivent une copie transparente du matériau ; tout le reste est opaque, et les quelques
     // pixels de verre de ses textures deviennent des découpes nettes. Une seule couche transparente
