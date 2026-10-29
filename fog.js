@@ -2,6 +2,11 @@
 // Le shader qui l'inclut doit déclarer avant : uTime, uFog, uOffset, uFocus.
 
 export const FOG_GLSL = /* glsl */ `
+// Scène 2 : à partir de uStop (secondes), plus aucun nuage ne part du fond ; ceux en route finissent leur trajet
+#ifndef STOP_NUAGES
+const float uStop = 1e9;
+#endif
+
 // Bruit doux pour dessiner les nuages
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
@@ -101,7 +106,8 @@ vec3 addFog(vec3 col, vec3 dq, float scene) {
     float k = fract(life);                     // 0 au fond du tunnel, 1 au premier plan
     float pass = floor(life);
     vec2 rnd = vec2(hash(vec2(pass, fi)), hash(vec2(fi, pass + 4.2)));
-    if (hash(vec2(pass + 1.7, fi * 3.3)) < 0.25) continue; // un passage sur quatre : pas de nuage
+    if (hash(vec2(pass + 1.7, fi * 3.3)) < 0.35) continue; // un passage sur trois environ : pas de nuage
+    if ((pass - hash(vec2(fi, 8.7))) * CYCLE / speed > uStop) continue; // parti après l'arrêt de la brume plate
 
     // Profondeur du nuage : il va du fond du tunnel jusqu'à nous et nous dépasse (au-delà de 1),
     // pour passer aussi sur le quai à nos pieds
