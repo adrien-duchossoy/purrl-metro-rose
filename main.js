@@ -31,7 +31,7 @@ function direct() {
   // ?rame&debut : au départ de la rotation, train encore dans le tunnel (pour « Rejouer la séquence »)
   const debut = test.has('debut')
   scene2.setRotation(debut ? 0 : 1)
-  scene2.setArrivee(debut ? 0 : 1)
+  scene2.setArrivee(test.has('avancee') ? Number(test.get('avancee')) : debut ? 0 : 1) // ?avancee=0.2 : train en cours d'arrivée
   scene2.start()
   $('gl2').classList.add('visible')
   scene2.showGui()
