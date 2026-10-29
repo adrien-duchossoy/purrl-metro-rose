@@ -1,2 +1,4 @@
 node_modules/
 .DS_Store
+# modèle source téléchargé (41 Mo) : la scène utilise public/scene2/tram.glb
+gold_coast_glink_light_rail_tram_flexity_2.glb
