@@ -18,6 +18,14 @@ La scène 2 (arrivée du métro, portes, entrée dans la rame) est **en 3D temps
 4. Version téléphone : AO en 2048 ou 1024, ombres des lustres coupées, test sur iPhone. En 4096, Safari iOS a déjà fermé la page avec le tram.
 5. Bandes claires le long des bords de porte (reflet du rebord), décor, mascottes Purrl dans la rame : questions ouvertes.
 
+## Textures de l'intérieur (2 novembre au soir)
+
+Toutes recolorées : on garde grain, brillance, AO et relief, la couleur reste celle de la matière. Images dans `public/scene2/tex/` (`<nom>_motif.jpg` : R nuances, V rugosité, B AO ; `<nom>_relief.jpg` : normal map). Projection selon l'orientation des faces (`texturer` dans `rame.js`), sauf le sol (vu du dessus, `lino`).
+- Sol : Poly Haven `linoleum_brown`, bleu `#d0dee4`, rugosité 0,2, reflet calculé des bandeaux du plafond (sol seulement).
+- Assises : Poly Haven `velour_velvet`, couleurs d'origine, sheen. Matière à part pour les sièges (le blanc `metro.001` sert aussi au plafond).
+- Plastiques (parois, cadres, plafond) : ambientCG `Plastic004`. Plastic003 et Plastic018B essayés puis refusés (« moche »).
+- Soufflet : les plaques roses droites du modèle (`union` / matière `interior`) sont retirées dans `preparerMP89` ; on voit le vrai soufflet en caoutchouc.
+
 ## Le modèle MP 89
 
 - CGTrader n° 677325 (materielpneu), Royalty Free, 49,50 $. Annoncé avec textures PBR mais livré sans : Adrien a fait une réclamation.

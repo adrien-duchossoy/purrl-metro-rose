@@ -77,6 +77,12 @@ if (MP89) params.velours = {
   lustre: 1, // sheen : lustre du velours vu de biais
   lustreRugosite: 0.5, // étalement de ce lustre
 }
+// Plastique de l'intérieur (ambientCG Plastic004, CC0) : parois, cadres des sièges, accordéon et plafond, chacun
+// dans sa couleur. Grain, brillance, AO et relief seulement. La rugosité de base reste celle de chaque matière
+// (panneau « Matières ») : la texture n'ajoute que ses variations.
+if (MP89) params.textures = {
+  plastique: { motif: 1, rugositeVariation: 1, relief: 1, ao: 1, taille: 0.5 },
+}
 // Rendu final de l'image (scene2.js) : grain, halo de lumière autour des zones claires (effet dreamy) et
 // saturation du métro (Reinhard ternit les couleurs : la saturation les ravive)
 params.rendu = {
@@ -617,14 +623,16 @@ export function load(scene, renderer, manager) {
         for (const m of matsAO[partie]) { m.aoMap = t; m.aoMapIntensity = params.lumieres.ao; m.needsUpdate = true }
       })
     }
-    for (const [u, f] of [['tVel', 'velours_motif.jpg'], ['tVelN', 'velours_relief.jpg']]) {
-      new THREE.TextureLoader(manager).load(`scene2/tex/${f}`, (t) => {
-        t.wrapS = t.wrapT = THREE.RepeatWrapping
-        t.colorSpace = THREE.NoColorSpace
-        t.anisotropy = renderer.capabilities.getMaxAnisotropy()
-        velU[u].value = t
-        for (const m of matsVelours) m.needsUpdate = true
-      })
+    for (const [nom, { fichier }] of Object.entries(TEXTURES)) {
+      for (const [u, f] of [['tTx', `${fichier}_motif.jpg`], ['tTxN', `${fichier}_relief.jpg`]]) {
+        new THREE.TextureLoader(manager).load(`scene2/tex/${f}`, (t) => {
+          t.wrapS = t.wrapT = THREE.RepeatWrapping
+          t.colorSpace = THREE.NoColorSpace // données, pas des couleurs
+          t.anisotropy = renderer.capabilities.getMaxAnisotropy()
+          texU[nom][u].value = t
+          for (const m of matsTexture[nom]) m.needsUpdate = true
+        })
+      }
     }
     for (const [u, f] of [['tLino', 'lino_motif.jpg'], ['tLinoN', 'lino_relief.jpg']]) {
       new THREE.TextureLoader(manager).load(`scene2/tex/${f}`, (t) => {
@@ -799,62 +807,78 @@ const solU = {
   uBandesY: { value: new Array(8).fill(0) }, uRefletBandes: { value: 1 }, uVersTramSol: bordOuv.uVersTram,
 }
 const matsSol = []
-// Velours : posé par projection selon l'orientation de chaque face (les coordonnées de texture des sièges ne sont
-// pas faites pour un motif), dans le repère de chaque pièce. velours_motif.jpg : rouge = nuances (écart max 0,30),
-// vert = rugosité (écart max 0,26), bleu = AO. velours_relief.jpg : normal map (OpenGL).
-const velU = { tVel: { value: null }, tVelN: { value: null }, uVelRepet: { value: 1 }, uVelMotif: { value: 1 }, uVelRug: { value: 1 }, uVelRelief: { value: 1 }, uVelAO: { value: 1 } }
-const matsVelours = []
-function velours(m) {
+// Matières texturées (velours des assises, plastiques) : posées par projection selon l'orientation de chaque face
+// (les coordonnées de texture du modèle ne sont pas faites pour un motif), dans le repère de chaque pièce.
+// <nom>_motif.jpg : rouge = nuances, vert = rugosité, bleu = AO ; <nom>_relief.jpg : normal map (OpenGL).
+// Seuls le grain, la brillance, l'AO et le relief de la photo sont gardés : la couleur reste celle de la matière.
+// A, B : écarts maximaux des nuances et de la rugosité dans la photo ; ao : moyenne de l'AO (recentrée).
+const TEXTURES = {
+  velours: { fichier: 'velours', A: 0.3013, B: 0.2581, ao: 0.891 }, // Poly Haven velour_velvet
+  plastique: { fichier: 'plastique', A: 0.1435, B: 0.2682, ao: 0.929 }, // ambientCG Plastic004
+}
+const texU = Object.fromEntries(Object.keys(TEXTURES).map((k) => [k, {
+  tTx: { value: null }, tTxN: { value: null }, uTxRepet: { value: 1 }, uTxMotif: { value: 1 }, uTxRug: { value: 1 }, uTxRelief: { value: 1 }, uTxAO: { value: 1 },
+}]))
+const matsTexture = Object.fromEntries(Object.keys(TEXTURES).map((k) => [k, []]))
+const matsVelours = matsTexture.velours
+function texturer(m, nom) {
+  const U = texU[nom], k = TEXTURES[nom]
   const avant = m.onBeforeCompile, cleAvant = m.customProgramCacheKey
   m.onBeforeCompile = (s, r) => {
     avant.call(m, s, r)
-    if (!velU.tVel.value || !velU.tVelN.value) return // recompilé quand les deux images sont là
-    Object.assign(s.uniforms, velU)
-    s.vertexShader = 'uniform float uVelRepet;\nvarying vec3 vVPos, vVNrm, vVAx, vVAy, vVAz;\n' + s.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
-      vVPos = position * length(modelMatrix[0].xyz) * uVelRepet; // en motifs, à l'échelle réelle
-      vVNrm = normal;
-      vVAx = normalize(normalMatrix * vec3(1.0, 0.0, 0.0));
-      vVAy = normalize(normalMatrix * vec3(0.0, 1.0, 0.0));
-      vVAz = normalize(normalMatrix * vec3(0.0, 0.0, 1.0));`)
-    s.fragmentShader = 'uniform sampler2D tVel, tVelN;\nuniform float uVelMotif, uVelRug, uVelRelief, uVelAO;\nvarying vec3 vVPos, vVNrm, vVAx, vVAy, vVAz;\n' + s.fragmentShader
+    if (!U.tTx.value || !U.tTxN.value) return // recompilé quand les deux images sont là
+    Object.assign(s.uniforms, U)
+    s.vertexShader = 'uniform float uTxRepet;\nvarying vec3 vTxPos, vTxNrm, vTxAx, vTxAy, vTxAz;\n' + s.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      vTxPos = position * length(modelMatrix[0].xyz) * uTxRepet; // en motifs, à l'échelle réelle
+      vTxNrm = normal;
+      vTxAx = normalize(normalMatrix * vec3(1.0, 0.0, 0.0));
+      vTxAy = normalize(normalMatrix * vec3(0.0, 1.0, 0.0));
+      vTxAz = normalize(normalMatrix * vec3(0.0, 0.0, 1.0));`)
+    s.fragmentShader = 'uniform sampler2D tTx, tTxN;\nuniform float uTxMotif, uTxRug, uTxRelief, uTxAO;\nvarying vec3 vTxPos, vTxNrm, vTxAx, vTxAy, vTxAz;\n' + s.fragmentShader
       .replace('#include <color_fragment>', `#include <color_fragment>
-      vec3 vAn = abs(normalize(vVNrm));
-      vec3 vW = pow(vAn, vec3(4.0)); vW /= vW.x + vW.y + vW.z;
-      vec2 vUx = vVPos.zy, vUy = vVPos.xz, vUz = vVPos.xy;
-      vec3 vel = texture2D(tVel, vUx).rgb * vW.x + texture2D(tVel, vUy).rgb * vW.y + texture2D(tVel, vUz).rgb * vW.z;
-      diffuseColor.rgb *= max(0.0, 1.0 + 0.3013 * uVelMotif * (2.0 * vel.r - 1.0));`)
+      vec3 txAn = abs(normalize(vTxNrm));
+      vec3 txW = pow(txAn, vec3(4.0)); txW /= txW.x + txW.y + txW.z;
+      vec2 txUx = vTxPos.zy, txUy = vTxPos.xz, txUz = vTxPos.xy;
+      vec3 tx = texture2D(tTx, txUx).rgb * txW.x + texture2D(tTx, txUy).rgb * txW.y + texture2D(tTx, txUz).rgb * txW.z;
+      diffuseColor.rgb *= max(0.0, 1.0 + ${k.A.toFixed(4)} * uTxMotif * (2.0 * tx.r - 1.0));`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-      roughnessFactor = clamp(roughnessFactor + 0.2581 * uVelRug * (2.0 * vel.g - 1.0), 0.04, 1.0);`)
+      roughnessFactor = clamp(roughnessFactor + ${k.B.toFixed(4)} * uTxRug * (2.0 * tx.g - 1.0), 0.04, 1.0);`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
       {
-        vec2 u = vUz; vec3 T = vVAx, B = vVAy;
-        if (vAn.x >= vAn.y && vAn.x >= vAn.z) { u = vUx; T = vVAz; B = vVAy; }
-        else if (vAn.y >= vAn.z) { u = vUy; T = vVAx; B = vVAz; }
-        vec3 vn = texture2D(tVelN, u).xyz * 2.0 - 1.0;
-        vn.xy *= uVelRelief;
-        normal = normalize(T * vn.x + B * vn.y + normal * vn.z);
+        vec2 u = txUz; vec3 T = vTxAx, B = vTxAy;
+        if (txAn.x >= txAn.y && txAn.x >= txAn.z) { u = txUx; T = vTxAz; B = vTxAy; }
+        else if (txAn.y >= txAn.z) { u = txUy; T = vTxAx; B = vTxAz; }
+        vec3 tn = texture2D(tTxN, u).xyz * 2.0 - 1.0;
+        tn.xy *= uTxRelief;
+        normal = normalize(T * tn.x + B * tn.y + normal * tn.z);
       }`)
       .replace('vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;',
-        'vec3 totalDiffuse = (reflectedLight.directDiffuse + reflectedLight.indirectDiffuse) * mix(1.0, vel.b / 0.891, uVelAO);') // AO recentrée sur sa moyenne : la teinte moyenne ne change pas
+        // AO recentrée sur sa moyenne : la teinte moyenne ne change pas
+        `vec3 totalDiffuse = (reflectedLight.directDiffuse + reflectedLight.indirectDiffuse) * mix(1.0, tx.b / ${k.ao.toFixed(3)}, uTxAO);`)
   }
-  m.customProgramCacheKey = () => cleAvant.call(m) + (velU.tVel.value && velU.tVelN.value ? '_velours' : '')
-  matsVelours.push(m)
+  m.customProgramCacheKey = () => cleAvant.call(m) + (U.tTx.value && U.tTxN.value ? '_' + nom : '')
+  matsTexture[nom].push(m)
 }
-function majVelours() {
-  const p = params.velours
-  if (!p) return
-  for (const m of matsVelours) {
-    m.roughness = p.rugosite
-    m.sheen = p.lustre
-    m.sheenRoughness = p.lustreRugosite
+function majTextures() {
+  for (const nom of Object.keys(TEXTURES)) {
+    const p = nom === 'velours' ? params.velours : params.textures?.[nom]
+    if (!p) continue
+    const U = texU[nom]
+    U.uTxRepet.value = 1 / p.taille
+    U.uTxMotif.value = p.motif
+    U.uTxRug.value = p.rugositeVariation
+    U.uTxRelief.value = p.relief
+    U.uTxAO.value = p.ao
+  }
+  const v = params.velours
+  if (v) for (const m of matsVelours) {
+    m.roughness = v.rugosite
+    m.sheen = v.lustre
+    m.sheenRoughness = v.lustreRugosite
     m.sheenColor.copy(m.color) // le lustre prend la couleur du tissu
   }
-  velU.uVelRepet.value = 1 / p.taille
-  velU.uVelMotif.value = p.motif
-  velU.uVelRug.value = p.rugositeVariation
-  velU.uVelRelief.value = p.relief
-  velU.uVelAO.value = p.ao
 }
+const majVelours = majTextures
 // Motif du lino posé vu du dessus (le sol est plat, ses coordonnées de texture ne sont pas faites pour un motif).
 // Les écarts sont ceux de la photo : nuances 0,41 et rugosité 0,10 au maximum, autour de la moyenne.
 // lino_motif.jpg : rouge = nuances, vert = rugosité, bleu = AO du lino. lino_relief.jpg : normal map (OpenGL).
@@ -976,7 +1000,9 @@ function preparerMP89(gltf, renderer) {
   // cuit : la pièce a la lumière cuite (second jeu d'UV) ; elle reçoit sa propre copie de la matière
   const matiere = (m, cuit, partie, siege) => {
     const tissu = siege && (m.name === 'metro.001' || m.name === 'asiento') // assises : le blanc sert aussi au plafond
-    const cle = m.uuid + (cuit ? '_cuit' : '') + '_' + partie + (tissu ? '_velours' : '')
+    const texture = tissu ? 'velours'
+      : m.name === 'interior' || m.name === 'metro.001' ? 'plastique' : null // parois, accordéon, plafond
+    const cle = m.uuid + (cuit ? '_cuit' : '') + '_' + partie + (texture ? '_' + texture : '')
     if (remplace.has(cle)) return remplace.get(cle)
     let r = cuit ? m.clone() : m
     if (tissu) {
@@ -1015,10 +1041,15 @@ function preparerMP89(gltf, renderer) {
     if (g) matsGroupe[g].add(r) // réglé par le panneau « Matières du métro »
     if (g && g !== 'vitres') envDiffus(r) // lumière diffuse de l'env map dosée (« Lustres en vraies lumières »)
     if (m.name === 'piso') lino(r)
-    if (tissu) velours(r)
+    if (texture) texturer(r, texture)
     remplace.set(cle, r)
     return r
   }
+  // Soufflet entre les voitures (objet union) : le modèle pose des plaques roses droites devant le vrai soufflet
+  // plissé en caoutchouc. Dans un vrai métro on voit le soufflet : on retire les plaques (validé par Adrien, 02/11)
+  const plaques = []
+  gltf.scene.traverse((o) => { if (o.isMesh && o.parent?.name === 'union' && o.material.name === 'interior') plaques.push(o) })
+  for (const o of plaques) o.removeFromParent()
   const vitres = []
   gltf.scene.traverse((o) => {
     if (!o.isMesh) return
@@ -1267,6 +1298,15 @@ export function addGui(gui) {
     ve.add(params.velours, 'taille', 0.05, 1, 0.01).name('Taille du motif (m)').onChange(majVelours)
     ve.add(params.velours, 'lustre', 0, 2, 0.01).name('Lustre vu de biais (sheen)').onChange(majVelours)
     ve.add(params.velours, 'lustreRugosite', 0, 1, 0.01).name('Étalement du lustre').onChange(majVelours)
+    for (const [nom, label] of [['plastique', 'Plastique (parois, cadres, accordéon, plafond)']]) {
+      const f = int.addFolder(label)
+      const p = params.textures[nom]
+      f.add(p, 'motif', 0, 2, 0.01).name('Nuances').onChange(majTextures)
+      f.add(p, 'rugositeVariation', 0, 2, 0.01).name('Variations de brillance').onChange(majTextures)
+      f.add(p, 'relief', 0, 3, 0.01).name('Relief').onChange(majTextures)
+      f.add(p, 'ao', 0, 1, 0.01).name('Ombre des creux (AO)').onChange(majTextures)
+      f.add(p, 'taille', 0.05, 2, 0.01).name('Taille du motif (m)').onChange(majTextures)
+    }
     so.add(params.sol, 'taille', 0.5, 4, 0.05).name('Taille du motif (m)').onChange(majSol)
   }
 
