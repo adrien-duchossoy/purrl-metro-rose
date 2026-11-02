@@ -60,7 +60,7 @@ export const params = {
 
 // Réglages d'Adrien pour le MP 89 (02/11) : le tram garde ses valeurs validées au-dessus
 if (MP89) Object.assign(params.lumieres, {
-  reflets: 1.6, station: 0.1, lustres: 0.9, lustresCouleur: '#feeeea', ao: 1.45, vitres: 6,
+  reflets: 1.6, station: 0.1, lustres: 0.9, lustresCouleur: '#feeeea', ao: 1, vitres: 6, // ao : au-delà de 1, les raccords de l'ombre cuite se voient
   clarte: 0.7, plafonniers: 4.8, interieur: 0.95, aoInterieur: 1, exposition: 0.9, tonemapping: 3,
 })
 // Rendu final de l'image (scene2.js) : grain, halo de lumière autour des zones claires (effet dreamy) et
@@ -586,13 +586,20 @@ export function load(scene, renderer, manager) {
     const loader = new GLTFLoader(manager)
     loader.setDRACOLoader(new DRACOLoader(manager).setDecoderPath('draco/'))
     loader.load(`scene2/mp89.glb?v=${Date.now()}`, (gltf) => preparerMP89(gltf, renderer))
-    new THREE.TextureLoader(manager).load(`scene2/mp89_ao.png?v=${Date.now()}`, (t) => {
+    const chargerAO = (fichier, poser) => new THREE.TextureLoader(manager).load(`scene2/${fichier}?v=${Date.now()}`, (t) => {
       t.channel = 1 // second jeu d'UV (TEXCOORD_1)
       t.flipY = false // même sens que les textures glTF
       t.colorSpace = THREE.NoColorSpace // donnée, pas une couleur
       t.anisotropy = renderer.capabilities.getMaxAnisotropy()
+      poser(t)
+    })
+    chargerAO('mp89_ao.png', (t) => {
       texAO = t
       for (const m of matsAO) { m.aoMap = t; m.aoMapIntensity = params.lumieres.ao; m.needsUpdate = true }
+    })
+    chargerAO('mp89_ao_portes.png', (t) => {
+      texAOPortes = t
+      for (const m of matsAOPortes) { m.aoMap = t; m.aoMapIntensity = params.lumieres.ao; m.needsUpdate = true }
     })
     if (CUISSON) new HDRLoader(manager).load(`scene2/mp89_lumiere.hdr?v=${Date.now()}`, (t) => {
       t.channel = 1 // second jeu d'UV (TEXCOORD_1)
@@ -797,9 +804,10 @@ function majLustres() {
 // Ombre de contact (ambient occlusion) cuite par Cycles (survey/scene2/metro/mp89/cuire_ao.py) : le fond des creux
 // (poignées, joints, encadrements) reçoit moins de lumière que la surface. Three.js ne le calcule pas lui-même.
 // Elle assombrit la lumière de la station et la lumière cuite ; sa force est le réglage « Ombres dans les creux (AO) ».
-const matsAO = []
-let texAO = null
-function ombreContact(m) {
+const matsAO = [], matsAOPortes = []
+let texAO = null, texAOPortes = null
+// porte : les vantaux ont leur propre image d'ombre, bien plus fine (une poignée n'avait que quelques pixels)
+function ombreContact(m, porte) {
   // Three.js n'applique l'ombre de contact qu'à la lumière indirecte (station, lumière cuite) : on l'applique
   // aussi à la lumière directe des lustres, qui éclaire le plus le métro, sinon les creux resteraient en pleine lumière
   const avant = m.onBeforeCompile, cleAvant = m.customProgramCacheKey
@@ -812,8 +820,9 @@ function ombreContact(m) {
       #endif`)
   }
   m.customProgramCacheKey = () => cleAvant.call(m) + '_ombreContact'
-  if (texAO) m.aoMap = texAO
-  matsAO.push(m)
+  const t = porte ? texAOPortes : texAO
+  if (t) m.aoMap = t
+  ;(porte ? matsAOPortes : matsAO).push(m)
   aoMats.push(m)
 }
 
@@ -828,8 +837,8 @@ function majCuisson() {
 function preparerMP89(gltf, renderer) {
   const remplace = new Map()
   // cuit : la pièce a la lumière cuite (second jeu d'UV) ; elle reçoit sa propre copie de la matière
-  const matiere = (m, cuit) => {
-    const cle = cuit ? m.uuid + '_cuit' : m.uuid
+  const matiere = (m, cuit, porte) => {
+    const cle = m.uuid + (cuit ? '_cuit' : '') + (porte ? '_porte' : '')
     if (remplace.has(cle)) return remplace.get(cle)
     let r = cuit ? m.clone() : m
     if (m.name === 'pintura' || m.name === 'puerta') {
@@ -857,7 +866,7 @@ function preparerMP89(gltf, renderer) {
     }
     if (cuit && m.name !== 'verre') {
       if (CUISSON) lumiereCuite(r)
-      ombreContact(r)
+      ombreContact(r, porte)
     }
     const g = groupeDe(m.name)
     if (g) matsGroupe[g].add(r) // réglé par le panneau « Matières du métro »
@@ -869,7 +878,9 @@ function preparerMP89(gltf, renderer) {
   gltf.scene.traverse((o) => {
     if (!o.isMesh) return
     o.castShadow = o.receiveShadow = true // ombres de la lumière principale
-    o.material = matiere(o.material, !!o.geometry.attributes.uv1)
+    let porte = false
+    for (let p = o; p; p = p.parent) if (p.name.startsWith('mp_door_')) porte = true
+    o.material = matiere(o.material, !!o.geometry.attributes.uv1, porte)
     if (o.material.name === 'verre') {
       o.renderOrder = 1
       vitres.push(o)
