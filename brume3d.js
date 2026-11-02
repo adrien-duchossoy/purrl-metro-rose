@@ -27,6 +27,7 @@ export const params = {
   tourbillons: 1, // agitation laissée par le passage du train
   calme: 4, // secondes pour qu'une nappe perde son élan
   paillettes: 1, // éclat des paillettes accrochées aux nappes
+  horsTrain: true, // la brume n'entre pas dans le volume du train
 }
 
 const N = 300 // nappes au plus en même temps (chacune coûte cher à dessiner : elles se recouvrent)
@@ -109,6 +110,9 @@ const mat = new THREE.ShaderMaterial({
     uSparkle: { value: params.paillettes },
     uStretch: { value: params.etirement },
     uScale: { value: params.echelle },
+    uTrainMin: { value: new THREE.Vector3() },
+    uTrainMax: { value: new THREE.Vector3() },
+    uTrain: { value: 0 },
   },
   vertexShader: /* glsl */ `
     in vec3 iPos, iVel;
@@ -144,7 +148,8 @@ const mat = new THREE.ShaderMaterial({
     in float vDepth, vSeed, vAlpha;
     out vec4 fragColor;
     uniform sampler2D tDepth;
-    uniform float uNear, uFar, uTime, uOpacity, uSparkle, uScale;
+    uniform float uNear, uFar, uTime, uOpacity, uSparkle, uScale, uTrain;
+    uniform vec3 uTrainMin, uTrainMax;
     uniform vec2 uRes;
 
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -183,6 +188,12 @@ const mat = new THREE.ShaderMaterial({
       float z = texture(tDepth, gl_FragCoord.xy / uRes).r;
       float sceneDepth = -(uNear * uFar) / ((uFar - uNear) * z - uFar);
       a *= smoothstep(0.0, 1.2, sceneDepth - vDepth) * smoothstep(0.6, 2.5, vDepth);
+      // La brume ne rentre pas dans le train : un point de nappe situé dans le volume du métro (vu par une
+      // porte ou une vitre) est effacé, en douceur sur les 30 derniers centimètres. Ailleurs, rien ne change.
+      if (uTrain > 0.5) {
+        vec3 dIn = min(vWorld - uTrainMin, uTrainMax - vWorld); // > 0 dans le volume du train
+        a *= 1.0 - smoothstep(0.0, 0.3, min(min(dIn.x, dIn.y), dIn.z));
+      }
       a *= vAlpha * uOpacity;
 
       vec3 col = mix(vec3(0.99, 0.86, 0.92), vec3(0.95, 0.78, 0.86), dens); // mêmes roses que la brume de la photo
@@ -248,6 +259,8 @@ export function update(dt, time, box) {
   mat.uniforms.uSparkle.value = params.paillettes
   mat.uniforms.uStretch.value = params.etirement
   mat.uniforms.uScale.value = params.echelle
+  mat.uniforms.uTrain.value = box && params.horsTrain ? 1 : 0
+  if (box) { mat.uniforms.uTrainMin.value.copy(box.min); mat.uniforms.uTrainMax.value.copy(box.max) }
   if (dt <= 0) return
 
   // Vitesse du train (le long de z), déduite de son déplacement
@@ -385,6 +398,7 @@ export function addGui(gui) {
   const f = gui.addFolder('Brume 3D')
   f.add(params, 'visible').name('Visible')
   f.add(params, 'opacite', 0, 1, 0.01).name('Opacité')
+  f.add(params, 'horsTrain').name('Pas dans le train')
   f.add(params, 'taille', 1, 12, 0.1).name('Taille (m)')
   f.add(params, 'echelle', 0.05, 1, 0.01).name('Finesse des volutes')
   f.add(params, 'etirement', 0, 3, 0.05).name('Étirement au souffle')

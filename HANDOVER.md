@@ -1,88 +1,75 @@
 # Handover : le métro 3D de la scène 2
 
-Mis à jour le 2 novembre 2026. À lire en début de conversation, avec `CLAUDE.md` (racine survey) et `metro/ETAT.md`.
+Mis à jour le 2 novembre 2026 au soir. À lire en début de conversation, avec `CLAUDE.md` (racine survey) et `metro/ETAT.md`.
 
 ## Où on en est
 
-La scène 2 (arrivée du métro, portes, entrée dans la rame) reste **en 3D temps réel dans Three.js**. Les pistes vidéo IA et rendu Blender des 30 octobre au 1er novembre sont abandonnées (détail plus bas).
+La scène 2 (arrivée du métro, portes, entrée dans la rame) est **en 3D temps réel dans Three.js**, avec le **MP 89** à la place du tram. L'ancien tram reste accessible avec `?tram` (étiquette git `tram-avant-mp89`).
 
-Adrien vient d'acheter un nouveau modèle : un **MP 89 CC** (métro parisien sur pneus, lignes 1 et 14). **Prochaine étape : le retravailler et l'intégrer à la scène Three.js à la place du tram.**
+- Branche de travail : `feat/mp89-metro`. Seule `main` publie sur GitHub Pages : fusion en avance rapide, puis push, et suivre avec `gh run`. Version publiée : https://adrien-duchossoy.github.io/purrl-metro-rose/?rame. Adrien l'a testée sur iPhone : 60 i/s à quai, 50 au début.
+- Dernier commit publié : `3b96280` (compteur d'images par seconde).
+- **Non commité depuis** (à faire valider puis commiter) : panneau de réglages réorganisé, intérieur séparé avec sa propre ombre cuite, couleur intérieure `#e5cdd8` (choisie par Adrien), brume qui ne rentre plus dans le train, lumière cuite des bandeaux du plafond, accès `?debug`.
 
-Ce qu'Adrien veut garder tel quel : l'éclairage et le rendu actuels de `rame.js` et `scene2.js` (commit `263e90d`). Il les préfère, largement, à tout ce qui a été tenté le 1er novembre. Le seul levier de réalisme restant est la géométrie du modèle.
+## Problèmes ouverts, par priorité
 
-## Le nouveau modèle
+1. **Lumière des bandeaux du plafond : trop forte, et Adrien trouve le rendu « vraiment pas joli ».** Elle vient d'une cuisson Blender (`cuire_plafonniers.py`, plus bas) affichée dans `ombreContact` de `rame.js` : `directDiffuse += texture(tPlaf) * uPlaf * diffuseColor`. La force se règle dans « Intérieur de la rame > Lumière des plafonniers » (`params.lumieres.lumierePlafonniers`, 0,3 par défaut ; 0 l'éteint). Mesures au même cadrage, sol / plafond (0 à 255) : sans 98 / 63, à 0,3 139 / 144, à 1 194 / 222. Captures 107 à 109 de `vue-porte`. Défauts connus : les portes et les murs près des portes ne la reçoivent pas (ils ont leur propre atlas, non cuit) ; les pieds des sièges sortent presque blancs (cause non trouvée). Demander à Adrien ce qu'il attend avant de recuire : il veut que les bandeaux éclairent l'intérieur et y portent des ombres, mais sans ce rendu délavé.
+2. **Traits noirs sur les sièges : RÉGLÉ le 2 novembre au soir, validé par Adrien.** Vraie cause : 74 % de l'atlas d'ombre intérieur était un fond noir pur ; vues en biais, les faces fines lisent un mipmap où elles se mélangent à ce fond. Correction : `remplir_fond.py` (remplit le fond par push-pull, texels cuits inchangés) sur `mp89_ao_interieur.png` et `mp89_plafonniers.hdr`, après `corriger3.py` (repeint les faces de sièges presque noires ou très contrastées). Originaux dans `scene2/metro/mp89/sauvegardes/`. À refaire après toute recuisson. Le curseur « Intérieur : plancher » (0 par défaut) est devenu inutile. Captures 112 à 114. Ancienne note : (capture d'Adrien : `~/Desktop/Screenshot 2026-11-02 at 16.43.13.png`, entourés en rose). Petits traits en haut des dossiers et au fond des assises, près de la paroi. Prouvé : ils disparaissent quand on met « Ombres cuites dans les creux > Intérieur » à 0. Ce sont des faces très fines tournées vers la fente entre l'assise et le dossier, que l'ombre cuite (`mp89_ao_interieur.png`) met en noir complet. Une fermeture d'image (maximum puis minimum sur 5 px) n'a rien changé et a été annulée. Pistes non essayées : plancher d'ombre pour l'intérieur dans le shader, ou recuisson de l'AO avec ces faces exclues. Les sièges n'ont ni texture ni tissu : ne pas en parler comme s'ils en avaient.
+3. **Brume** : Adrien a demandé seulement qu'elle n'entre pas dans le wagon, **sans changer son aspect**. Fait dans `brume3d.js` : un point de nappe situé dans la boîte du train est effacé (fondu sur 30 cm) ; ailleurs, l'image est identique au pixel près (mesuré). Case « Pas dans le train » dans « Brume 3D » pour comparer. Pas encore de capture avec de la brume devant une porte ouverte. Une première version (nappes traitées comme des boules) changeait l'aspect devant le train : refusée et retirée.
+4. Version téléphone : AO en 2048 ou 1024, ombres des lustres coupées, test sur iPhone. En 4096, Safari iOS a déjà fermé la page avec le tram.
+5. Bandes claires le long des bords de porte (reflet du rebord), décor, mascottes Purrl dans la rame : questions ouvertes.
 
-- CGTrader, « Paris Subway Train 3D model », auteur materielpneu, modèle n° 677325, publié le 15/01/2017. Acheté 49,50 $.
-- Licence Royalty Free, sans IA. Pas de crédit obligatoire (contrairement au tram Jotrain en CC-BY).
-- Formats : STL, OBJ, FBX, **BLEND**. Partir du `.blend`.
-- 536 965 polygones, 848 539 sommets, pour deux voitures (dont une avec cabine), l'intérieur complet, la cabine et les voies.
-- Textures PBR en puissances de 2. Le créateur indique des UV qui se chevauchent : sans gêne pour les textures, mais à refaire si on veut cuire de la lumière.
-- Pièces mobiles modélisées à part (portes à vérifier).
-- La forme exacte du métro n'importe pas à Adrien : un MP 89 lui va.
-- Le fichier n'est pas encore dans le projet. Lui demander de le déposer dans `survey/scene2/metro/`.
+## Le modèle MP 89
 
-## Plan d'intégration (à valider pas à pas avec Adrien)
+- CGTrader n° 677325 (materielpneu), Royalty Free, 49,50 $. Annoncé avec textures PBR mais livré sans : Adrien a fait une réclamation.
+- Source : `metro model 3D/paris-subway-train-…/Blend/mp89cc.blend`, copié dans `survey/scene2/metro/mp89/` avec `paint.png` et `gauge.jpg`.
+- Placement validé : x 2,355 ; y 0,04 ; échelle 1,435 ; porte 3 (z -34,2256) ; rotation 90.
 
-1. **Inventaire** dans Blender en arrière-plan (`/Applications/Blender.app/Contents/MacOS/Blender -b fichier.blend --python script.py`) : objets, matériaux, textures et leurs tailles, portes séparées ou non, échelle réelle.
-2. **Nettoyage** : retirer les voies (la station a les siennes). Garder l'intérieur, utile pour l'entrée dans la rame, mais le séparer de l'extérieur.
-3. **Allègement** : viser environ 100 000 à 150 000 polygones pour l'extérieur vu du quai, et une version téléphone plus légère, comme `tram_mobile.glb` aujourd'hui. Textures en 2048 sur ordinateur, 1024 à 2048 sur téléphone : en 4096, Safari iOS dépassait sa mémoire.
-4. **Peinture rose** avec le liseré, sans numéros ni logos (Adrien ne veut aucun texte).
-5. **Export glb** (compression Draco ou meshopt) dans `public/scene2/`, à la place de `tram.glb` et `tram_mobile.glb`.
-6. **Adapter `rame.js`**. Beaucoup de constantes sont propres au tram et à son atlas de textures, et sont à refaire pour le MP 89 :
-   - `PORTES` (milieu de chaque porte côté quai) et `params.train.porte` ;
-   - `SOUFFLETS`, `BAS_DE_CAISSE`, `PLAFOND` (zones repérées dans les textures du tram) ;
-   - `PHARES` (position des feux avant) ;
-   - les noms d'objets et de matériaux testés dans le code : `_door_`, `window`, `glink_exterior`, `glink_interior` ;
-   - les sorties de porte `0.0662` et `0.0647` dans `placerPortes`, et l'ouverture `uOuv` du bord de caisse ;
-   - `params.train` : x 2,275 ; y -0,47 ; échelle 1,25. Le tram était plus grand qu'une rame parisienne, alors que le MP 89 est à l'échelle réelle : reprendre l'échelle à 1 et recaler sur notre voie, qui fait 6,25 m de large.
-7. **Garder l'éclairage actuel** (env map 1024 `envmap.hdr` et `envmap_base.hdr`, sans lumière directe) et le traitement validé : `peinture()` avec vernis, `refletVitre`, `bordCaisse` et `ombreRetrait` si les portes du MP 89 en ont besoin.
-8. Vérifier la fluidité sur un vrai iPhone.
-9. Retirer le tram et son crédit CC-BY, qui devient sans objet.
+### Scripts (dans `survey/scene2/metro/mp89/`)
+
+- `peindre.py` → `paint_purrl.png` (4096 × 1024) : blanc (244, 241, 238), bandeau rose (242, 197, 205), filet (208, 222, 228), logo PURRL rose (222, 150, 168) depuis `identity/logo/logo-validated.svg`.
+- `preparer.py` → `mp89_purrl.blend` et `public/scene2/mp89.glb` (Draco). Retire voie, décor, bogies 1 à 3. Vantaux séparés `mp_door_N_a/_b` (origine à l'axe). Intérieur séparé en objets `…_int` marqués `interieur = 1`. Second jeu d'UV « lumiere » en 3 atlas (caisse, portes, intérieur). Nez vers +x. 134 082 polygones.
+- `cuire_ao.py` (`PARTIES=corps,portes,interieur`) → `mp89_ao.png` (4096), `mp89_ao_portes.png` (2048), `mp89_ao_interieur.png` (4096, 128 échantillons). Puis `lisser_ao.py mp89_ao_interieur.png` (médian 5 px) contre les points noirs.
+- `cuire_plafonniers.py` → `public/scene2/mp89_plafonniers.hdr` (2048, 512 échantillons, environ 15 min, la machine fait du bruit). Monde noir, seule la matière `luz` émet (force 10), passe Diffuse directe + indirecte sans couleur, sur les 36 objets intérieurs. Les bandeaux sont les objets `light` et `light2`.
+- `cuire_lumiere.py` (cuisson de la lumière de la station) : abandonné, sans gain dans Three.js. `mp89_lumiere.hdr` (24 Mo) n'est pas commité.
+- Lancer Blender en arrière-plan : `/Applications/Blender.app/Contents/MacOS/Blender -b mp89_purrl.blend --python script.py`. `mp89_purrl.blend` n'est pas modifié par les cuissons.
+
+## Le code
+
+- `rame.js` : `MP89 = !has('tram')`, `preparerMP89()`. `matiere(m, cuit, partie)` avec partie corps, porte ou interieur. `ombreContact(m, partie)` applique l'AO aussi à la lumière directe, plus la lumière des bandeaux pour l'intérieur. `GROUPES` et `appliquerMatieres` pour les matières extérieures. 2 lustres en vraies lumières avec ombres, aux (8,12 ; 4,94 ; -31,49) et (8,12 ; 4,94 ; -39,51). Valeurs d'Adrien pour le MP 89 dans le `Object.assign(params.lumieres, …)` en haut du fichier.
+- `scene2.js` : ombres PCFSoft, passe finale (tone mapping au choix, saturations, halo, grain), compteur de performance.
+- `brume3d.js` : nappes de brume en 3D, poussées par le train.
+- Panneau : tout fermé par défaut. Vue ; Métro : position et arrivée ; Éclairage du métro ; Matières extérieures ; Intérieur de la rame ; Image finale ; Brume 3D ; « Copier les valeurs ».
+- Performance (M1 Pro) : 48 i/s avec les ombres des lustres, 60 sans.
 
 ## Ce qui a été essayé et n'a pas marché
 
-### Vidéos IA de l'arrivée (30 octobre au 1er novembre)
-Détail dans `survey/scene2/PASSATION_VIDEO.md`. Fichiers 72 à 83 dans `survey/scene2/vue-porte/`. Environ 3,30 $ de vidéos et 0,45 $ d'images.
-- **Kling 3 Pro** (de `decor-base` à l'image des portes) : rendu flou, presque dessiné, un objet inventé au premier plan pour cacher la transition.
-- **Gemini Omni Flash 1.1** (Google, 0,03 $/s, bien moins cher que Kling à 0,14 $/s) : rendu très réaliste jusqu'au virage de la caméra. Le modèle ne sait pas tourner la caméra entre deux images éloignées : il coupe ou fait surgir un second train, à chaque essai, quel que soit le prompt. Avec une image de raccord au milieu, le train ralentit avant le raccord puis repart. Le logo, présent seulement sur l'image de fin, apparaît d'un coup.
-- **Gemini en texte seul**, sans image : ambiance correcte, mais il ajoute des panneaux de station et des logos RATP malgré les consignes, et commence à ouvrir les portes sans finir.
-- **Nano Banana Pro** pour refaire l'image des portes : il ignore les consignes de déplacement de caméra et, avec plusieurs images en entrée, recopie celle de son choix. Il faut lui donner un guide de cadrage rendu dans Blender (`survey/scene2/guides/clay_CamPorteBord.png`).
-
-### Tram rendu dans Blender et posé sur la photo (1er novembre)
-Rendu Cycles dans `quai.blend`, gare en shadow catcher, puis brume, halo et grain ajoutés en post : `survey/scene2/vue-porte/84_test_tram_3d_dans_gare.jpg`. Jugé « nul », bien en dessous de la scène Three.js. Erreur de méthode : être reparti de zéro au lieu de partir des matières déjà réglées dans `rame.js`.
-
-### Matière et lumière de la carrosserie dans Three.js (1er novembre, tout annulé)
-Tout a été codé dans `rame.js`, comparé au même cadrage, puis annulé à la demande d'Adrien (`git checkout rame.js`). Images de comparaison : 85 à 88 dans `survey/scene2/vue-porte/`.
-- **Env map en 4096 × 2048**, rendue dans Blender depuis le même point (Blender 2,3 ; 35,5 ; 1,6), avec la même lumière moyenne : quasi invisible de face. Les fichiers sont gardés hors du projet, dans le scratchpad de la session du 1er novembre.
-- **Reflets calés sur la boîte de la station** (box projection de l'env map) : changement minime.
-- **Peinture non métallisée** (métal 0 au lieu de 0,5) : rose plus franc, plus « plastique ».
-- **Peau d'orange, ondulation des tôles, salissure, vernis terni** (procédural dans le repère du tram) : à peine visible de face, car un vernis ne reflète que 4 % de la lumière.
-- **Lustres en vraies lumières** (6 groupes) et **ombres portées** (2 spots) : la lumière directe a fait réapparaître la coupe à 45° des coins de porte (corrigée en appliquant l'ombre du bord de caisse aux lumières directes). Gain visuel faible, coût en performance. **Adrien préfère largement le rendu d'avant.**
-- Leçon : sur ce tram, ni la lumière ni les textures n'étaient le vrai frein. C'est la géométrie (caisse sans arrondis, soufflet peint à plat, détails dessinés), d'où l'achat du MP 89.
-
-## Données utiles
-
-- **Coordonnées** : un point Blender (x, y, z) devient (x, z, -y) dans Three.js.
-- **Caméras** de `quai.blend` : toutes au point (7,996 ; 37,744 ; 1,6) dans Blender. `decor-base` correspond exactement à `CamQuai` (24 mm, lacet 168,9°), avec une corrélation de 0,988 au rendu.
-- **Station** dans Blender : notre quai de x 4,25 à 11,5, les voies de x -2 à 4,25, voûte jusqu'à z 7, mur du tunnel en y = 0.
-- **Env map** actuelle (1024 × 512) : prise du centre de la voie (Blender 2,3 ; 35,5 ; 1,6), la moitié côté tunnel recopiée en miroir au-delà de y = 35,5 (collection « EnvMap (test) » de `quai.blend`).
-- **Lustres côté quai**, groupes de 3 boules, en coordonnées Three.js : (5,84 ; 6,15 ; -27,08), (8,12 ; 4,94 ; -31,49), (8,12 ; 4,94 ; -39,51), (5,84 ; 6,15 ; -43,92). Luminance 12, rayon d'environ 0,47 m.
+- **Vidéos IA de l'arrivée** (30 octobre au 1er novembre), détail dans `survey/scene2/PASSATION_VIDEO.md`. Abandonné.
+- **Tram rendu dans Blender et posé sur la photo** (1er novembre) : jugé « nul ».
+- **Retouches de la carrosserie du tram dans Three.js** (1er novembre) : gain invisible, tout annulé.
+- **Cuisson de la lumière de la station sur le MP 89** (2 novembre) : présentée à partir d'un rendu Cycles, sans gain une fois dans Three.js. Leçon : ne jamais présenter un rendu Cycles comme preuve.
+- **22 lustres en vraies lumières (ombres VSM)** : 5 i/s, abandonné.
+- **Dégradé de lumière peint à la main** présenté comme une ombre : refusé par Adrien.
+- **AO avec un seul atlas pour tout le métro** : trop grossière. AO au-dessus de 1 : les raccords se voient.
 
 ## Lancer et capturer
 
-- `cd survey/metro && npm run dev`, puis https://localhost:5175/?rame (train arrêté, panneau ouvert). `?rame&debut&jouer` rejoue la séquence, `?rame&avancee=0.9` montre le train en fin d'arrivée. iPhone : https://192.168.1.58:5175.
-- **La capture Chrome sans interface ne marche plus** : elle reste bloquée sur l'écran d'accueil. Utiliser l'extension Claude in Chrome (skill `claude-in-chrome`), cacher le panneau avec `document.querySelectorAll('.lil-gui.root').forEach(e => e.style.display = 'none')`, puis faire la capture.
-- Blender en arrière-plan : forcer le GPU (`compute_device_type = 'METAL'`, puis `refresh_devices()`), sinon Cycles plante sur le CPU avec les textures 4K. Ne jamais nommer un script Python `inspect.py` ou `enum.py` : il masque le module du même nom.
+- `cd survey/metro && npm run dev`, puis http://localhost:5175/?rame (HTTP ; le téléphone se teste sur la version publiée). Options : `?ouv=1` portes ouvertes, `?rame&debut&jouer` rejoue l'arrivée, `?nofps` masque le compteur, `?tram` l'ancien tram, `?cuisson` la lumière de station cuite (essai abandonné), `?nobrume`.
+- `?debug` expose `window.__scene = { camera, controls, setFree, rame, scene }`. Pour entrer dans la rame : cocher « Vue libre (souris) » dans « Vue », puis par exemple `camera.position.set(2.38, 1.55, -35.3)`, `controls.target.set(2.38, 1.1, -40)`, `controls.update()`.
+- Capture : extension Claude in Chrome. Cacher le panneau avec `document.querySelectorAll('.lil-gui.root').forEach(e => e.style.opacity='0')`.
+- Pour régler un contrôle depuis la console, toujours viser son dossier : plusieurs contrôles portent le même nom (« Opacité » existe pour les vitres et pour la brume). Un `import('/brume3d.js')` depuis la console peut donner une autre copie du module que celle de la page : passer par le panneau.
+- Passer sur `main` fait redémarrer Vite : vérifier http://localhost:5175 après, et faire `touch vite.config.js` si besoin.
 
 ## Comment travailler avec Adrien
 
 - Réponses courtes, en français, sans tiret cadratin. Guidage pas à pas, il est débutant en Three.js.
-- Il est exigeant sur le réalisme. **Toujours prouver par une capture avant/après au même cadrage, zoomée sur la zone**, copiée dans `survey/scene2/vue-porte/` (numérotée, dernier numéro : 88) puis ouverte avec `open`. Le scratchpad ne lui est pas accessible.
-- Lui montrer plutôt que conclure à sa place. Il refuse les essais en série : vérifier soi-même avant de montrer.
-- Toujours prévoir un retour en arrière (git, ou option d'URL) avant de changer le rendu.
-- Aucun appel fal sans validation et coût annoncé. Ne rien commiter sans demande.
-- `quai.blend` peut être ouvert dans son Blender avec des modifications non enregistrées (collections « EnvMap (test) » et, depuis le 1er novembre, « GuideTrainBord » et la caméra `CamPorteBord`) : ne pas l'enregistrer ni l'écraser sans accord.
+- **Faire exactement ce qu'il demande, rien de plus.** Le 2 novembre, il a demandé que la brume ne rentre pas dans le wagon, et l'aspect de la brume a été changé : il l'a très mal pris.
+- **Ne pas inventer** ce qu'on n'a pas vérifié (exemple : « tissu » des sièges, qui n'existe pas). Si on ne trouve pas un défaut qu'il signale, lui demander sa capture tout de suite.
+- **Preuve dans Three.js** : capture avant/après au même cadrage, zoomée, mesurée, copiée dans `survey/scene2/vue-porte/` (numérotée, dernier numéro : 109) puis ouverte avec `open`. Dire ce qui est calculé et ce qui est réglé à la main.
+- Une demande répétée est une priorité : il a dû demander trois fois que les bandeaux éclairent.
+- Ne pas lancer de cuisson Blender pendant qu'il regarde la scène sans le prévenir de la durée et du bruit. Pas d'essais en série. Toujours un retour en arrière (git, case du panneau ou option d'URL).
+- Aucun appel fal sans validation et coût annoncé. Ne rien commiter sans son accord. Commits conventionnels en anglais.
+- `quai.blend` peut être ouvert dans son Blender avec des modifications non enregistrées : ne jamais l'enregistrer ni l'écraser.
 
 ## Skills à charger
 
-`threejs-skill-router` en premier, puis selon le sujet : `threejs-errors-performance` (allègement, perf iPhone), `threejs-visual-validation` (captures à vue fixe), `threejs-image-pipeline` avant de toucher aux passes de `scene2.js`.
+`threejs-skill-router` en premier, puis selon le sujet : `threejs-impl-lighting` et `threejs-shadow-systems` (bandeaux), `threejs-errors-performance` (version téléphone), `threejs-visual-validation` (captures à vue fixe), `threejs-image-pipeline` avant de toucher aux passes de `scene2.js`.

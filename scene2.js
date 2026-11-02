@@ -433,6 +433,8 @@ function setFree(on) {
   }
 }
 
+// ?debug : accès à la caméra depuis la console, pour placer des vues de contrôle
+if (new URLSearchParams(location.search).has('debug')) window.__scene = { camera, controls, setFree, rame, scene }
 const gui = new GUI({ title: 'Réglages scène 2' })
 gui.hide()
 const v2 = gui.addFolder('Vue')
@@ -441,13 +443,6 @@ v2.add(view, 'libre').name('Vue libre (souris)').onChange(setFree)
 v2.add(view, 'brume').name('Brume visible')
 v2.add({ sequence: () => sequence().then(portesAuGeste) }, 'sequence').name('▶ Rejouer la séquence')
 rame.addGui(gui)
-const rg = gui.addFolder('Rendu final (grain, halo, saturation)')
-rg.add(rame.params.rendu, 'grain', 0, 0.2, 0.005).name('Grain')
-rg.add(rame.params.rendu, 'halo', 0, 2, 0.01).name('Halo de lumière (lens glare)')
-rg.add(rame.params.rendu, 'seuil', 0, 3, 0.01).name('Seuil du halo')
-rg.add(rame.params.rendu, 'rayon', 0.5, 6, 0.1).name('Étendue du halo')
-rg.add(rame.params.rendu, 'saturation', 0, 3, 0.01).name('Saturation du métro')
-rg.add(rame.params.rendu, 'saturationImage', 0, 2, 0.01).name('Saturation de toute l\'image')
 brume3d.addGui(gui)
 gui.add({
   copier() {
@@ -459,6 +454,8 @@ gui.add({
   },
 }, 'copier').name('Copier les valeurs')
 const copyBtn = gui.controllers.at(-1)
+// Tout fermé par défaut : on n'ouvre que la catégorie qu'on règle
+for (const f of gui.foldersRecursive()) f.close()
 
 export function showGui() { gui.show() }
 
