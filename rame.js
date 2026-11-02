@@ -52,6 +52,55 @@ export const params = {
   },
 }
 
+// Matières extérieures du MP 89, réglables dans le panneau « Matières du métro ». Couleurs en sRGB (celles
+// du fichier au départ). reflets : force de l'env map de la station sur cette matière (× Intensité générale).
+const GROUPES = {
+  peinture: { noms: ['pintura', 'puerta'], label: 'Peinture (caisse, portes)' },
+  vitres: { noms: ['verre'], label: 'Vitres' },
+  encadrements: { noms: ['metro'], label: 'Fond des encadrements et seuils' },
+  joints: { noms: ['rubber', 'rubber.001', 'rubber.002'], label: 'Caoutchouc (cadres des vitres, joint central, soufflet)' },
+  metal: { noms: ['metal', 'metalpuerta', 'metal puerta', 'metal.001'], label: 'Métal (poignées, barres intérieures)' },
+  plastique: { noms: ['plastic'], label: 'Plastique (bas de caisse)' },
+  dessous: { noms: ['metalbogie', 'bogie', 'black', 'black boogie'], label: 'Métal sombre (bogie, porte-bagages)' },
+}
+if (MP89) params.matieres = {
+  reperer: 'aucun', // groupe affiché en cyan, pour voir quelles pièces il couvre
+  peinture: { rugosite: 0.3, metal: 0, vernis: 1, vernisRugosite: 0.05, reflets: 1 },
+  vitres: { opacite: 0.3, rugosite: 0.05, reflets: 1 },
+  encadrements: { couleur: '#404040', rugosite: 0.5, metal: 0, reflets: 1 },
+  joints: { couleur: '#333333', rugosite: 0.5, metal: 0, reflets: 1 },
+  metal: { couleur: '#999999', rugosite: 0.4, metal: 0.6, reflets: 1 },
+  plastique: { couleur: '#3e3e3e', rugosite: 0.5, metal: 0, reflets: 1 },
+  dessous: { couleur: '#595959', rugosite: 0.4, metal: 0.6, reflets: 1 },
+}
+const matsGroupe = Object.fromEntries(Object.keys(GROUPES).map((g) => [g, new Set()]))
+const groupeDe = (nom) => Object.keys(GROUPES).find((g) => GROUPES[g].noms.includes(nom))
+function appliquerMatieres() {
+  const M = params.matieres
+  if (!M) return
+  for (const g of Object.keys(GROUPES)) {
+    const p = M[g]
+    for (const m of matsGroupe[g]) {
+      if ('couleur' in p) m.color.set(p.couleur)
+      m.roughness = p.rugosite
+      if ('metal' in p) m.metalness = p.metal
+      if ('vernis' in p) { m.clearcoat = p.vernis; m.clearcoatRoughness = p.vernisRugosite }
+      if ('opacite' in p) m.opacity = p.opacite
+      // Avec une env map propre à la matière, Three.js utilise son envMapIntensity (et plus l'intensité de la scène)
+      m.envMapIntensity = p.reflets * params.lumieres.reflets
+      m.emissive?.set(M.reperer === g ? 0x00ffff : 0x000000)
+    }
+  }
+}
+// Donne l'env map de la station à chaque matière réglable (sinon leur curseur « Reflets » n'aurait aucun effet)
+function envMatieres() {
+  const env = envScene?.environment
+  if (!env) return
+  for (const set of Object.values(matsGroupe)) for (const m of set) {
+    if (m.envMap !== env) { const premiere = !m.envMap; m.envMap = env; if (premiere) m.needsUpdate = true }
+  }
+}
+
 export const group = new THREE.Group()
 const ambient = new THREE.AmbientLight()
 const sun = new THREE.DirectionalLight()
@@ -129,6 +178,7 @@ function majEnv() {
     envPmrem ??= new THREE.PMREMGenerator(envRenderer)
     const ancien = envScene.environment
     envScene.environment = envPmrem.fromEquirectangular(envRT.texture).texture
+    envMatieres()
     ancien?.dispose()
   }, 60)
 }
@@ -619,17 +669,17 @@ export function load(scene, renderer, manager) {
 // Le modèle n'a pas de textures de matière : couleurs unies et une texture de peinture (paint_purrl.png).
 // On garde la même lumière que le tram (env map de la station) et la même peinture vernie.
 const INTERIEUR_MP89 = ['interior', 'metro.001', 'asiento', 'piso', 'pupitre']
-const METAL_MP89 = ['metal', 'metalbogie', 'metalpuerta', 'metal puerta', 'metal.001']
 function preparerMP89(gltf, renderer) {
   const remplace = new Map()
   const matiere = (m) => {
     if (remplace.has(m)) return remplace.get(m)
     let r = m
     if (m.name === 'pintura' || m.name === 'puerta') {
-      // Peinture rose : mêmes réglages que la caisse du tram (vernie, métallisée, la station s'y reflète)
+      // Peinture blanche et rose pastel, vernie comme celle du tram. Non métallisée : un blanc métallisé
+      // prend la couleur de ce qu'il reflète et vire au gris rose.
       r = new THREE.MeshPhysicalMaterial({
         name: m.name, map: m.map, color: m.color,
-        roughness: 0.16, metalness: 0.5, clearcoat: 1, clearcoatRoughness: 0.04,
+        roughness: 0.3, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.05,
       })
       if (r.map) r.map.anisotropy = renderer.capabilities.getMaxAnisotropy()
       bordCaisse(r) // pour la clarté de la carrosserie ; aucune ouverture n'est déclarée (bordOuv reste vide)
@@ -647,9 +697,9 @@ function preparerMP89(gltf, renderer) {
     } else if (INTERIEUR_MP89.includes(m.name)) {
       eclairerInterieur(m)
       interieurs.push(m)
-    } else if (METAL_MP89.includes(m.name)) {
-      Object.assign(m, { metalness: 0.6, roughness: 0.4 })
     }
+    const g = groupeDe(m.name)
+    if (g) matsGroupe[g].add(r) // réglé par le panneau « Matières du métro »
     remplace.set(m, r)
     return r
   }
@@ -684,6 +734,8 @@ function preparerMP89(gltf, renderer) {
   }
 
   for (const m of remplace.values()) if (m.name === 'luzroja') m.emissiveIntensity = 0.3
+  envMatieres()
+  appliquerMatieres()
   placerPortes()
   tram = gltf.scene
   group.add(gltf.scene)
@@ -741,6 +793,7 @@ export function update() {
   bordOuv.uClarte.value = l.clarte
   for (const m of interieurs) { m.emissiveIntensity = l.plafonniers; m.aoMapIntensity = l.aoInterieur }
   uInterieur.value = l.interieur
+  appliquerMatieres() // « Intensité générale » agit aussi sur les matières qui ont leur propre env map
 }
 
 // Arrivée jouée en entier : le train sort du tunnel puis freine jusqu'à l'arrêt.
@@ -802,6 +855,27 @@ export function addGui(gui) {
   e.add(params.lumieres, 'plafonniers', 0, 10, 0.1).name('Plafonniers de la rame').onChange(update)
   e.add(params.lumieres, 'interieur', 0.5, 4, 0.05).name('Intérieur éclairé').onChange(update)
   e.add(params.lumieres, 'aoInterieur', 0, 1, 0.05).name('Ombres de l\'intérieur').onChange(update)
+
+  if (MP89) {
+    const M = params.matieres
+    const mg = gui.addFolder('Matières du métro')
+    const choix = { Aucun: 'aucun', ...Object.fromEntries(Object.entries(GROUPES).map(([g, { label }]) => [label, g])) }
+    mg.add(M, 'reperer', choix).name('Repérer en cyan').onChange(appliquerMatieres)
+    for (const [g, { label }] of Object.entries(GROUPES)) {
+      const f = mg.addFolder(label)
+      f.close()
+      const p = M[g]
+      if ('couleur' in p) f.addColor(p, 'couleur').name('Couleur').onChange(appliquerMatieres)
+      f.add(p, 'rugosite', 0, 1, 0.01).name('Rugosité').onChange(appliquerMatieres)
+      if ('metal' in p) f.add(p, 'metal', 0, 1, 0.01).name('Métal').onChange(appliquerMatieres)
+      f.add(p, 'reflets', 0, 5, 0.05).name('Reflets (env map)').onChange(appliquerMatieres)
+      if ('vernis' in p) {
+        f.add(p, 'vernis', 0, 1, 0.01).name('Vernis').onChange(appliquerMatieres)
+        f.add(p, 'vernisRugosite', 0, 1, 0.01).name('Rugosité du vernis').onChange(appliquerMatieres)
+      }
+      if ('opacite' in p) f.add(p, 'opacite', 0, 1, 0.01).name('Opacité').onChange(appliquerMatieres)
+    }
+  }
 
   const l = gui.addFolder('Lumières directes')
   l.close()
