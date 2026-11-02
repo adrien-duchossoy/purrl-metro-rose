@@ -50,7 +50,7 @@ export const params = {
 // Réglages d'Adrien pour le MP 89 (02/11) : le tram garde ses valeurs validées au-dessus
 if (MP89) Object.assign(params.lumieres, {
   reflets: 1.6, station: 0.1, lustres: 0.9, lustresCouleur: '#feeeea', ao: 1, vitres: 6, // ao : au-delà de 1, les raccords de l'ombre cuite se voient
-  clarte: 0.7, plafonniers: 4.8, lumierePlafonniers: 0.3, interieur: 0.95, aoInterieur: 1, exposition: 0.9, tonemapping: 3,
+  clarte: 0.7, plafonniers: 4.8, lumierePlafonniers: 0.3, interieur: 0.25, aoInterieur: 1, exposition: 0.9, tonemapping: 3,
 })
 // Sol de la rame : linoléum Poly Haven « linoleum_brown » (CC0), recoloré. Seuls son motif, sa rugosité et son
 // relief sont gardés (public/scene2/tex/lino_motif.jpg et lino_relief.jpg) ; la couleur est réglée ici.
@@ -239,6 +239,16 @@ const refletVitre = new THREE.MeshStandardMaterial({
   color: 0x000000, roughness: 0.03, metalness: 0, envMapIntensity: params.lumieres.vitres,
   transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
 })
+// Les vitres ignorent les spots cachés dans les bandeaux : sinon chaque source apparaît en point blanc dans le reflet
+// (les lustres, des lumières ponctuelles, gardent leur reflet)
+function sansSpots(m) {
+  m.onBeforeCompile = (s) => {
+    s.fragmentShader = s.fragmentShader.replace('#include <lights_fragment_begin>',
+      THREE.ShaderChunk.lights_fragment_begin.replace('#if ( NUM_SPOT_LIGHTS > 0 )', '#if 0'))
+  }
+  m.customProgramCacheKey = () => 'sansSpots'
+}
+sansSpots(refletVitre)
 
 // Matières de la carrosserie. Le fichier exporté donne une rugosité de 0 et une métallicité de 0,5 partout
 // (sa carte de rugosité est vide) : tout le métro devenait un miroir chromé. On recalcule une carte par zone
@@ -564,6 +574,7 @@ function placerPortes() {
     for (const c of p.copies) c.position.copy(p.o.position)
   }
   majOmbres()
+  majBandeaux() // allumés à l'ouverture des portes
 }
 
 // Après le geste : au-delà de la moitié, les portes finissent de s'ouvrir seules, sinon elles se referment.
@@ -948,6 +959,46 @@ function majSol() {
   solU.uLinoAO.value = p.ao
   solU.uRefletBandes.value = p.reflet * params.lumieres.plafonniers // aussi lumineux que les bandeaux
 }
+// Bandeaux du plafond en vraies lumières, avec ombres portées (barres, reliefs des parois, sièges). Les lumières
+// rectangulaires de Three.js (essai du 02/11) n'ont pas d'ombres : ce sont des spots, cachés dans les bandeaux,
+// au milieu d'un panneau, tournés comme lui vers l'allée. Deux par côté dans chaque voiture visible depuis la fin
+// du parcours. Repère du métro : panneaux centrés à y 1,79, z ±0,61 ; voiture de la porte 3 de x 0 à 11,9, l'autre
+// de -13,06 à -1,15. Ombres recalculées seulement quand quelque chose bouge (majOmbres).
+if (MP89) params.bandeaux = { actifs: true, intensite: 12, angle: 65, flou: 0.8 } // intensité en candelas
+// Un spot par panneau autour de la porte 3 (3 par côté), 1 par côté dans la voiture suivante. Pas plus de 8 :
+// avec les 2 lustres et les textures des matières, une matière ne peut pas lire plus de 16 textures (erreur de shader).
+const BANDEAUX_X = [4.96, 2.97, 0.99, -4.12]
+const bandeaux = []
+function poserBandeaux(scene) {
+  for (const x of BANDEAUX_X) for (const cote of [1, -1]) {
+    const l = new THREE.SpotLight(0xffffff, 0, 0, 1, 0.8, 2)
+    l.position.set(x, 1.79, 0.61 * cote)
+    l.target.position.set(x, 1.79 - 0.75, 0.61 * cote - 0.67 * cote) // face lumineuse du panneau
+    l.castShadow = true
+    l.shadow.mapSize.set(2048, 2048) // 1024 : ombres baveuses
+    Object.assign(l.shadow.camera, { near: 0.05, far: 12 })
+    l.shadow.bias = -0.0005
+    l.shadow.normalBias = 0.02
+    scene.add(l, l.target)
+    bandeaux.push(l)
+  }
+}
+function majBandeaux() {
+  const p = params.bandeaux
+  if (!p) return
+  // Allumés seulement à l'ouverture des portes : avant, à quai, ils ne se voient pas et coûtaient près de la moitié
+  // des images par seconde (chaque pixel relit leurs 8 cartes d'ombre). Retirés de la scène, pas mis à 0, sinon ils
+  // coûtent quand même. Premier allumage : les shaders se recompilent une fois.
+  const allumes = p.actifs && params.portes.ouverture > 0
+  for (const l of bandeaux) {
+    l.visible = allumes
+    l.intensity = p.actifs ? p.intensite : 0
+    l.angle = THREE.MathUtils.degToRad(p.angle)
+    l.penumbra = p.flou
+    l.castShadow = p.actifs
+  }
+  majOmbres()
+}
 function majLustres() {
   const p = params.lustresReels
   if (!p) return
@@ -988,6 +1039,10 @@ function ombreContact(m, partie) {
         reflectedLight.directDiffuse += texture2D(tPlaf, vAoMapUv).rgb * uPlaf * diffuseColor.rgb;
       #endif`)
     if (partie === 'interieur') {
+      // AO de l'intérieur en puissance (la formule de Three.js devient négative au-delà de 1) : à 1 l'ombre bakée
+      // telle quelle, au-dessus des creux de plus en plus sombres, sans passer au noir pur
+      s.fragmentShader = s.fragmentShader.replace('#include <aomap_fragment>',
+        THREE.ShaderChunk.aomap_fragment.replace('( texture2D( aoMap, vAoMapUv ).r - 1.0 ) * aoMapIntensity + 1.0', 'pow( texture2D( aoMap, vAoMapUv ).r, aoMapIntensity )'))
       s.defines = { ...s.defines, PLAFONNIERS: '' }
       s.uniforms.tPlaf = uPlafTex
       s.uniforms.uPlaf = uPlafForce
@@ -1032,6 +1087,7 @@ function preparerMP89(gltf, renderer) {
         blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
         blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneFactor,
       })
+      sansSpots(r)
     } else if (m.name === 'luz') {
       interieurs.push(r) // plafonniers (et feux avant) : réglés par « Plafonniers de la rame »
     } else if (INTERIEUR_MP89.includes(m.name)) {
@@ -1095,6 +1151,24 @@ function preparerMP89(gltf, renderer) {
   }
 
   for (const m of remplace.values()) if (m.name === 'luzroja') m.emissiveIntensity = 0.3
+  // Fond de la rame : le modèle n'a qu'une voiture à cabine et une voiture simple, ouverte à l'arrière (on voyait
+  // le tunnel au bout). La voiture à cabine et son soufflet sont dupliqués derrière, tournés de 180° (un MP 89 a
+  // une cabine à chaque bout). Géométries et matières partagées : AO et lumière bakées restent valables.
+  // Repère du métro : voiture à cabine de x -0,08 à 14 ; voiture simple de -14,3 à -0,91 ; même jeu de 0,83 m.
+  gltf.scene.updateMatrixWorld(true)
+  const versRame = gltf.scene.matrixWorld.clone().invert(), centre = new THREE.Vector3()
+  const arriere = new THREE.Group()
+  arriere.name = 'rame_arriere'
+  for (const c of [...gltf.scene.children]) {
+    const b = new THREE.Box3().setFromObject(c)
+    if (b.isEmpty()) continue
+    b.applyMatrix4(versRame).getCenter(centre)
+    if (centre.x > -0.5 || c.name === 'union') arriere.add(c.clone(true))
+  }
+  arriere.rotation.y = Math.PI // x → -x, z → -z (la voiture est symétrique gauche-droite)
+  arriere.position.x = -15.21 // x' = -15,21 - x : le bout x -0,08 se pose à -15,13, à 0,83 m de la voiture simple
+  gltf.scene.add(arriere)
+  poserBandeaux(gltf.scene)
   // Bandeaux du plafond (objets light et light2, deux bandes chacun) : leurs faces tournées vers le bas, dans le
   // repère du métro, donnent pour chaque bande sa longueur, son milieu, sa demi-largeur et sa hauteur
   const bandes = []
@@ -1177,6 +1251,7 @@ export function update() {
   uInterieur.value = l.interieur
   appliquerMatieres() // « Intensité générale » agit aussi sur les matières qui ont leur propre env map
   majLustres() // recalcule aussi les ombres : le métro a pu bouger
+  majBandeaux()
   majSol()
   majVelours()
 }
@@ -1244,9 +1319,9 @@ export function addGui(gui) {
   e.addColor(params.lumieres, 'lustresCouleur').name('Teinte des lustres').onChange(majEnv)
   if (MP89) e.add(params.lustresReels, 'envDiffus', 0, 1, 0.01).name('Lumière diffuse gardée').onChange(majLustres)
   e.add(params.lumieres, 'clarte', 0.5, 2.5, 0.05).name('Clarté de la carrosserie').onChange(update)
-  const o = ecl.addFolder('Ombres cuites dans les creux')
+  const o = ecl.addFolder('Ombres bakées dans les creux (AO)')
   o.add(params.lumieres, 'ao', 0, 2, 0.05).name('Extérieur (1 : calculé)').onChange(update)
-  o.add(params.lumieres, 'aoInterieur', 0, 1, 0.05).name('Intérieur').onChange(update)
+  o.add(params.lumieres, 'aoInterieur', 0, 4, 0.05).name('Intérieur (1 : baké, plus : creux plus sombres)').onChange(update)
   const ph = ecl.addFolder('Phares')
   ph.add(params.lumieres, 'phares', 0, 20, 0.1).name('Intensité')
   ph.add(params.lumieres, 'glare', 0, 3, 0.05).name('Éblouissement').onChange(update)
@@ -1285,8 +1360,15 @@ export function addGui(gui) {
     reglerMatiere(pl, M.interieur)
   }
   int.add(params.lumieres, 'plafonniers', 0, 10, 0.1).name('Plafonniers').onChange(update)
+  if (MP89) {
+    const bd = int.addFolder('Bandeaux en vraies lumières (ombres)')
+    bd.add(params.bandeaux, 'actifs').name('Allumés').onChange(majBandeaux)
+    bd.add(params.bandeaux, 'intensite', 0, 30, 0.1).name('Intensité (candelas)').onChange(majBandeaux)
+    bd.add(params.bandeaux, 'angle', 20, 89, 1).name('Ouverture (°)').onChange(majBandeaux)
+    bd.add(params.bandeaux, 'flou', 0, 1, 0.01).name('Bord du faisceau (flou)').onChange(majBandeaux)
+  }
   int.add(params.lumieres, 'lumierePlafonniers', 0, 1, 0.01).name('Lumière des plafonniers').onChange(update)
-  int.add(params.lumieres, 'interieur', 0.5, 4, 0.05).name('Clarté de l\'intérieur').onChange(update)
+  int.add(params.lumieres, 'interieur', 0, 4, 0.05).name('Clarté de l\'intérieur').onChange(update)
   if (MP89) {
     const so = int.addFolder('Sol (linoléum)')
     so.addColor(params.sol, 'couleur').name('Couleur').onChange(majSol)

@@ -235,6 +235,7 @@ const post = new THREE.ShaderMaterial({
     tDepth: { value: target.depthTexture },
     tDepth1: { value: depth1 },
     tPuffs: { value: brume3d.texture },
+    uBrume: { value: 1 }, // 0 : caméra dans la rame, plus de brume ni de paillettes
     uProjInv: { value: new THREE.Matrix4() },
     uCamWorld: { value: new THREE.Matrix4() },
     uQuaiInv: { value: new THREE.Matrix3() },
@@ -263,6 +264,7 @@ const post = new THREE.ShaderMaterial({
     in vec2 vUv;
     out vec4 fragColor;
     uniform sampler2D tColor, tDepth, tDepth1, tPuffs;
+    uniform float uBrume;
     uniform mat4 uProjInv, uCamWorld;
     uniform mat3 uQuaiInv;
     uniform float uNear, uFar, uTime, uFog, uFocus;
@@ -388,9 +390,9 @@ const post = new THREE.ShaderMaterial({
       // de la station ne passent jamais.
       float metro = clamp(texture(tColor, vUv).a, 0.0, 1.0);
       sd = mix(sd, 2.0, metro);
-      col = addFog(col, dq, sd);
+      col = mix(col, addFog(col, dq, sd), uBrume);
       // Nappes de brume en 3D, déjà dessinées avec leur opacité (couleurs prémultipliées)
-      vec4 puffs = texture(tPuffs, vUv);
+      vec4 puffs = texture(tPuffs, vUv) * uBrume;
       col = col * (1.0 - puffs.a) + puffs.rgb;
       col += glare(vUv, uPhare[0]) + glare(vUv, uPhare[1]);
       // Halo de lumière, ajouté en « écran » (n'éclaircit jamais au-delà du blanc)
@@ -410,7 +412,7 @@ const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
 
 let fogLevel = () => 0.7
 
-// ---------- Panneau de réglages (caché pendant le parcours, affiché par showGui) ----------
+// ---------- Panneau de réglages (toujours affiché) ----------
 
 // Test : ?nobrume démarre sans brume
 const view = { rotation: 0, libre: false, brume: !new URLSearchParams(location.search).has('nobrume') }
@@ -435,8 +437,7 @@ function setFree(on) {
 
 // ?debug : accès à la caméra depuis la console, pour placer des vues de contrôle
 if (new URLSearchParams(location.search).has('debug')) window.__scene = { camera, controls, setFree, rame, scene, renderer }
-const gui = new GUI({ title: 'Réglages scène 2' })
-gui.hide()
+const gui = new GUI({ title: 'Réglages scène 2' }) // toujours visible (demande d'Adrien, 02/11)
 const v2 = gui.addFolder('Vue')
 v2.add(view, 'rotation', 0, 1, 0.001).name('Rotation caméra').listen().onChange((x) => { k = x })
 v2.add(view, 'libre').name('Vue libre (souris)').onChange(setFree)
@@ -555,9 +556,15 @@ function render(now = performance.now()) {
   if (PERF) perf(now)
   renderer.setRenderTarget(target)
   renderer.render(scene, camera)
-  brume3d.update(lastFrame === null ? 0 : Math.min(0.1, (now - lastFrame) / 1000), time, rame.boite())
+  // Dans la rame (la caméra a passé la porte), la brume n'est plus calculée : elle s'efface entre 40 et 60 %
+  // de l'avancée vers l'intérieur
+  const dehors = camFinPrete ? 1 - THREE.MathUtils.smoothstep(entree.avance, 0.4, 0.6) : 1
+  u.uBrume.value = dehors
+  if (dehors > 0) {
+    brume3d.update(lastFrame === null ? 0 : Math.min(0.1, (now - lastFrame) / 1000), time, rame.boite())
+    brume3d.render(renderer, camera)
+  }
   lastFrame = now
-  brume3d.render(renderer, camera)
   halo()
   renderer.setRenderTarget(null)
   renderer.render(postScene, postCam)

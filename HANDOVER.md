@@ -28,6 +28,17 @@ Toutes recolorées : on garde grain, brillance, AO et relief, la couleur reste c
 - Métal (barres, poignées) : ambientCG `Metal046A` (martelé), rugosité de base 0,55 (moins brillant que la photo), nuances 0,26.
 - Soufflet : les plaques roses droites du modèle (`union` / matière `interior`) sont retirées dans `preparerMP89` ; on voit le vrai soufflet en caoutchouc.
 
+## Lumière et ombres de l'intérieur (2 novembre, fin de soirée, validé par Adrien)
+
+- **8 spots avec ombres cachés dans les bandeaux** (`poserBandeaux`, `BANDEAUX_X` dans `rame.js`) : 3 par côté autour de la porte 3, 1 par côté dans la voiture suivante, tournés comme les panneaux, ombres 2048 px. Pas plus de 8 : au-delà, une matière dépasse 16 textures (erreur de shader). Les `RectAreaLight` (essai) n'ont pas d'ombres dans Three.js. Allumés seulement à l'ouverture des portes (retirés de la scène avant). Les vitres les ignorent (`sansSpots`). Coût mesuré (M1 Pro) : 60 i/s à quai, environ 30 dans la rame.
+- Éclairage uniforme de l'intérieur (« Clarté de l'intérieur ») à 0,25 : au-dessus, les ombres disparaissent. Ne pas le changer sans Adrien.
+- Bakes refaits (`cuire_ao.py`, `cuire_plafonniers.py`, dans `survey/scene2/metro/mp89/`) : plaques du soufflet retirées pendant le bake, **548 + 528 faces des parois retournées** (normales vers l'extérieur : le bake se faisait dans le creux de la paroi, montants noirs), AO intérieure en Non-Color (avant : encodée sRGB, lue trop claire) avec un rayon de 70 cm, bandeaux à 2 rebonds. AO de la carrosserie rebakée sans les plaques, encodage d'origine gardé. Après chaque bake intérieur : `lisser_ao.py`, copie dans `sauvegardes/…_avant_traits`, `corriger3.py`, `remplir_fond.py`.
+- AO intérieure en puissance dans le shader (curseur 0 à 4, 1 = baké).
+- Fond de la rame : la voiture à cabine (et son soufflet) est dupliquée à l'arrière, tournée de 180° (`rame_arriere`).
+- Brume coupée dans la rame (entre 40 et 60 % de l'avancée).
+- Panneau de réglages toujours visible.
+- Reste ouvert : test iPhone dans la rame (8 spots probablement trop lourds), AO extérieure encore encodée sRGB, cache des fichiers.
+
 ## Le modèle MP 89
 
 - CGTrader n° 677325 (materielpneu), Royalty Free, 49,50 $. Annoncé avec textures PBR mais livré sans : Adrien a fait une réclamation.
@@ -65,7 +76,7 @@ Toutes recolorées : on garde grain, brillance, AO et relief, la couleur reste c
 
 - `cd survey/metro && npm run dev`, puis http://localhost:5175/?rame (HTTP ; le téléphone se teste sur la version publiée). Options : `?ouv=1` portes ouvertes, `?rame&debut&jouer` rejoue l'arrivée, `?nofps` masque le compteur, `?tram` l'ancien tram, `?nobrume`.
 - `?debug` expose `window.__scene = { camera, controls, setFree, rame, scene }`. Pour entrer dans la rame : cocher « Vue libre (souris) » dans « Vue », puis par exemple `camera.position.set(2.38, 1.55, -35.3)`, `controls.target.set(2.38, 1.1, -40)`, `controls.update()`.
-- Capture : extension Claude in Chrome. Cacher le panneau avec `document.querySelectorAll('.lil-gui.root').forEach(e => e.style.opacity='0')`.
+- Capture : `node survey/outils/capture.mjs <url> <sortie.png> [reglages.js]` (Chrome headless à part, GPU Metal, panneau caché). **Ne plus utiliser l'extension Claude in Chrome** (bandeau gênant pour Adrien), sauf demande explicite.
 - Pour régler un contrôle depuis la console, toujours viser son dossier : plusieurs contrôles portent le même nom (« Opacité » existe pour les vitres et pour la brume). Un `import('/brume3d.js')` depuis la console peut donner une autre copie du module que celle de la page : passer par le panneau.
 - Passer sur `main` fait redémarrer Vite : vérifier http://localhost:5175 après, et faire `touch vite.config.js` si besoin.
 
