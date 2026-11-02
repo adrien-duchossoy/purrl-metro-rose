@@ -82,6 +82,7 @@ if (MP89) params.velours = {
 // (panneau « Matières ») : la texture n'ajoute que ses variations.
 if (MP89) params.textures = {
   plastique: { motif: 1, rugositeVariation: 1, relief: 1, ao: 1, taille: 0.5 },
+  caoutchouc: { motif: 1, rugositeVariation: 1, relief: 1, ao: 1, taille: 0.75 }, // soufflet et joints (validé par Adrien, 02/11)
 }
 // Rendu final de l'image (scene2.js) : grain, halo de lumière autour des zones claires (effet dreamy) et
 // saturation du métro (Reinhard ternit les couleurs : la saturation les ravive)
@@ -815,6 +816,7 @@ const matsSol = []
 const TEXTURES = {
   velours: { fichier: 'velours', A: 0.3013, B: 0.2581, ao: 0.891 }, // Poly Haven velour_velvet
   plastique: { fichier: 'plastique', A: 0.1435, B: 0.2682, ao: 0.929 }, // ambientCG Plastic004
+  caoutchouc: { fichier: 'caoutchouc', A: 0.9354, B: 0.1623, ao: 0.917 }, // ambientCG Rubber004
 }
 const texU = Object.fromEntries(Object.keys(TEXTURES).map((k) => [k, {
   tTx: { value: null }, tTxN: { value: null }, uTxRepet: { value: 1 }, uTxMotif: { value: 1 }, uTxRug: { value: 1 }, uTxRelief: { value: 1 }, uTxAO: { value: 1 },
@@ -1001,7 +1003,8 @@ function preparerMP89(gltf, renderer) {
   const matiere = (m, cuit, partie, siege) => {
     const tissu = siege && (m.name === 'metro.001' || m.name === 'asiento') // assises : le blanc sert aussi au plafond
     const texture = tissu ? 'velours'
-      : m.name === 'interior' || m.name === 'metro.001' ? 'plastique' : null // parois, accordéon, plafond
+      : m.name === 'interior' || m.name === 'metro.001' ? 'plastique' // parois, plafond
+      : groupeDe(m.name) === 'joints' ? 'caoutchouc' : null // soufflet, joints des vitres et des portes
     const cle = m.uuid + (cuit ? '_cuit' : '') + '_' + partie + (texture ? '_' + texture : '')
     if (remplace.has(cle)) return remplace.get(cle)
     let r = cuit ? m.clone() : m
@@ -1298,7 +1301,7 @@ export function addGui(gui) {
     ve.add(params.velours, 'taille', 0.05, 1, 0.01).name('Taille du motif (m)').onChange(majVelours)
     ve.add(params.velours, 'lustre', 0, 2, 0.01).name('Lustre vu de biais (sheen)').onChange(majVelours)
     ve.add(params.velours, 'lustreRugosite', 0, 1, 0.01).name('Étalement du lustre').onChange(majVelours)
-    for (const [nom, label] of [['plastique', 'Plastique (parois, cadres, accordéon, plafond)']]) {
+    for (const [nom, label] of [['plastique', 'Plastique (parois, cadres, plafond)'], ['caoutchouc', 'Caoutchouc (soufflet, joints)']]) {
       const f = int.addFolder(label)
       const p = params.textures[nom]
       f.add(p, 'motif', 0, 2, 0.01).name('Nuances').onChange(majTextures)
