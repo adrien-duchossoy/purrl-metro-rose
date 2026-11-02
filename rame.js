@@ -77,12 +77,14 @@ if (MP89) params.velours = {
   lustre: 1, // sheen : lustre du velours vu de biais
   lustreRugosite: 0.5, // étalement de ce lustre
 }
-// Plastique de l'intérieur (ambientCG Plastic004, CC0) : parois, cadres des sièges, accordéon et plafond, chacun
-// dans sa couleur. Grain, brillance, AO et relief seulement. La rugosité de base reste celle de chaque matière
+// Textures ambientCG (CC0) : plastique (Plastic004) sur les parois, cadres des sièges et plafond, caoutchouc
+// (Rubber004), métal (Metal046A), chacune dans la couleur de sa matière. Grain, brillance, AO et relief seulement. La rugosité de base reste celle de chaque matière
 // (panneau « Matières ») : la texture n'ajoute que ses variations.
 if (MP89) params.textures = {
-  plastique: { motif: 1, rugositeVariation: 1, relief: 1, ao: 1, taille: 0.5 },
+  plastique: { motif: 0.31, rugositeVariation: 1, relief: 1, ao: 1, taille: 0.5 }, // nuances réglées par Adrien (02/11)
   caoutchouc: { motif: 1, rugositeVariation: 1, relief: 1, ao: 1, taille: 0.75 }, // soufflet et joints (validé par Adrien, 02/11)
+  // Barres et poignées : brillance réduite par rapport à la photo (rugosité 0,2) : la base reste celle du panneau (0,55)
+  metal: { motif: 0.26, rugositeVariation: 1, relief: 1, ao: 1, taille: 0.3 }, // nuances réglées par Adrien (02/11)
 }
 // Rendu final de l'image (scene2.js) : grain, halo de lumière autour des zones claires (effet dreamy) et
 // saturation du métro (Reinhard ternit les couleurs : la saturation les ravive)
@@ -817,6 +819,7 @@ const TEXTURES = {
   velours: { fichier: 'velours', A: 0.3013, B: 0.2581, ao: 0.891 }, // Poly Haven velour_velvet
   plastique: { fichier: 'plastique', A: 0.1435, B: 0.2682, ao: 0.929 }, // ambientCG Plastic004
   caoutchouc: { fichier: 'caoutchouc', A: 0.9354, B: 0.1623, ao: 0.917 }, // ambientCG Rubber004
+  metal: { fichier: 'metal', A: 0.2767, B: 0.0835, ao: 0.927 }, // ambientCG Metal046A (martelé)
 }
 const texU = Object.fromEntries(Object.keys(TEXTURES).map((k) => [k, {
   tTx: { value: null }, tTxN: { value: null }, uTxRepet: { value: 1 }, uTxMotif: { value: 1 }, uTxRug: { value: 1 }, uTxRelief: { value: 1 }, uTxAO: { value: 1 },
@@ -1004,7 +1007,8 @@ function preparerMP89(gltf, renderer) {
     const tissu = siege && (m.name === 'metro.001' || m.name === 'asiento') // assises : le blanc sert aussi au plafond
     const texture = tissu ? 'velours'
       : m.name === 'interior' || m.name === 'metro.001' ? 'plastique' // parois, plafond
-      : groupeDe(m.name) === 'joints' ? 'caoutchouc' : null // soufflet, joints des vitres et des portes
+      : groupeDe(m.name) === 'joints' ? 'caoutchouc' // soufflet, joints des vitres et des portes
+      : groupeDe(m.name) === 'metal' ? 'metal' : null // barres, poignées
     const cle = m.uuid + (cuit ? '_cuit' : '') + '_' + partie + (texture ? '_' + texture : '')
     if (remplace.has(cle)) return remplace.get(cle)
     let r = cuit ? m.clone() : m
@@ -1301,7 +1305,7 @@ export function addGui(gui) {
     ve.add(params.velours, 'taille', 0.05, 1, 0.01).name('Taille du motif (m)').onChange(majVelours)
     ve.add(params.velours, 'lustre', 0, 2, 0.01).name('Lustre vu de biais (sheen)').onChange(majVelours)
     ve.add(params.velours, 'lustreRugosite', 0, 1, 0.01).name('Étalement du lustre').onChange(majVelours)
-    for (const [nom, label] of [['plastique', 'Plastique (parois, cadres, plafond)'], ['caoutchouc', 'Caoutchouc (soufflet, joints)']]) {
+    for (const [nom, label] of [['plastique', 'Plastique (parois, cadres, plafond)'], ['caoutchouc', 'Caoutchouc (soufflet, joints)'], ['metal', 'Métal (barres, poignées)']]) {
       const f = int.addFolder(label)
       const p = params.textures[nom]
       f.add(p, 'motif', 0, 2, 0.01).name('Nuances').onChange(majTextures)

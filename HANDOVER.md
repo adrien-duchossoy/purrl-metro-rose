@@ -25,6 +25,7 @@ Toutes recolorées : on garde grain, brillance, AO et relief, la couleur reste c
 - Assises : Poly Haven `velour_velvet`, couleurs d'origine, sheen. Matière à part pour les sièges (le blanc `metro.001` sert aussi au plafond).
 - Plastiques (parois, cadres, plafond) : ambientCG `Plastic004`. Plastic003 et Plastic018B essayés puis refusés (« moche »).
 - Caoutchouc (soufflet, joints des vitres et des portes) : ambientCG `Rubber004`, motif 75 cm.
+- Métal (barres, poignées) : ambientCG `Metal046A` (martelé), rugosité de base 0,55 (moins brillant que la photo), nuances 0,26.
 - Soufflet : les plaques roses droites du modèle (`union` / matière `interior`) sont retirées dans `preparerMP89` ; on voit le vrai soufflet en caoutchouc.
 
 ## Le modèle MP 89
