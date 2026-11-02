@@ -516,7 +516,8 @@ function adapter(now) {
 }
 
 // ?perf : mesures affichées à l'écran toutes les secondes (lisibles sur iPhone)
-const PERF = new URLSearchParams(location.search).has('perf')
+// Compteur d'images par seconde en haut à gauche, affiché en permanence pendant les tests (?nofps pour le masquer)
+const PERF = !new URLSearchParams(location.search).has('nofps')
 let perfT0 = 0, perfImages = 0, perfDiv = null
 function perf(now) {
   const i = renderer.info
