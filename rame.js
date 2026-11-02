@@ -52,6 +52,18 @@ if (MP89) Object.assign(params.lumieres, {
   reflets: 1.6, station: 0.1, lustres: 0.9, lustresCouleur: '#feeeea', ao: 1, vitres: 6, // ao : au-delà de 1, les raccords de l'ombre cuite se voient
   clarte: 0.7, plafonniers: 4.8, lumierePlafonniers: 0.3, interieur: 0.95, aoInterieur: 1, exposition: 0.9, tonemapping: 3,
 })
+// Sol de la rame : linoléum Poly Haven « linoleum_brown » (CC0), recoloré. Seuls son motif, sa rugosité et son
+// relief sont gardés (public/scene2/tex/lino_motif.jpg et lino_relief.jpg) ; la couleur est réglée ici.
+if (MP89) params.sol = {
+  couleur: '#d0dee4', // le bleu clair du filet sous les fenêtres (peindre.py)
+  motif: 1, // force des nuances du lino (1 : celles de la photo)
+  rugosite: 0.2, // rugosité moyenne : lino ciré, satiné (0,65 sur la photo, plus mat)
+  rugositeVariation: 1, // variations de brillance du lino (1 : celles de la photo)
+  relief: 1, // force du relief
+  ao: 1, // ombre des micro-creux du lino (rayures, grain)
+  reflet: 1, // reflet des bandeaux du plafond dans le sol (1 : physique)
+  taille: 2, // taille d'un motif, en mètres (2 m sur la photo)
+}
 // Rendu final de l'image (scene2.js) : grain, halo de lumière autour des zones claires (effet dreamy) et
 // saturation du métro (Reinhard ternit les couleurs : la saturation les ravive)
 params.rendu = {
@@ -592,6 +604,15 @@ export function load(scene, renderer, manager) {
         for (const m of matsAO[partie]) { m.aoMap = t; m.aoMapIntensity = params.lumieres.ao; m.needsUpdate = true }
       })
     }
+    for (const [u, f] of [['tLino', 'lino_motif.jpg'], ['tLinoN', 'lino_relief.jpg']]) {
+      new THREE.TextureLoader(manager).load(`scene2/tex/${f}`, (t) => {
+        t.wrapS = t.wrapT = THREE.RepeatWrapping
+        t.colorSpace = THREE.NoColorSpace // données, pas des couleurs
+        t.anisotropy = renderer.capabilities.getMaxAnisotropy() // net vu de biais
+        solU[u].value = t
+        for (const m of matsSol) m.needsUpdate = true
+      })
+    }
     new HDRLoader(manager).load(`scene2/mp89_plafonniers.hdr?v=${Date.now()}`, (t) => {
       t.channel = 1
       t.flipY = false // même sens que les images d'ombre
@@ -749,6 +770,77 @@ function envDiffus(m) {
   }
   m.customProgramCacheKey = () => cleAvant.call(m) + '_envDiffus'
 }
+const solU = {
+  tLino: { value: null }, tLinoN: { value: null },
+  uLinoRepet: { value: 1 }, uLinoMotif: { value: 1 }, uLinoRug: { value: 1 }, uLinoRelief: { value: 1 }, uLinoAO: { value: 1 },
+  uBandes: { value: Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, -1)) }, // xmin, xmax, z, demi-largeur
+  uBandesY: { value: new Array(8).fill(0) }, uRefletBandes: { value: 1 }, uVersTramSol: bordOuv.uVersTram,
+}
+const matsSol = []
+// Motif du lino posé vu du dessus (le sol est plat, ses coordonnées de texture ne sont pas faites pour un motif).
+// Les écarts sont ceux de la photo : nuances 0,41 et rugosité 0,10 au maximum, autour de la moyenne.
+// lino_motif.jpg : rouge = nuances, vert = rugosité, bleu = AO du lino. lino_relief.jpg : normal map (OpenGL).
+function lino(m) {
+  const avant = m.onBeforeCompile, cleAvant = m.customProgramCacheKey
+  m.onBeforeCompile = (s, r) => {
+    avant.call(m, s, r)
+    if (!solU.tLino.value || !solU.tLinoN.value) return // recompilé quand les deux images sont là
+    Object.assign(s.uniforms, solU)
+    s.vertexShader = 'uniform float uLinoRepet;\nuniform mat4 uVersTramSol;\nvarying vec2 vLino;\nvarying vec3 vLinoT, vLinoB, vTram;\n' + s.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      vLino = position.xz * uLinoRepet;
+      vTram = (uVersTramSol * modelMatrix * vec4(position, 1.0)).xyz;
+      vLinoT = normalize(normalMatrix * vec3(1.0, 0.0, 0.0));
+      vLinoB = normalize(normalMatrix * vec3(0.0, 0.0, 1.0));`)
+    s.fragmentShader = 'uniform sampler2D tLino, tLinoN;\nuniform float uLinoMotif, uLinoRug, uLinoRelief, uLinoAO, uRefletBandes, uBandesY[8];\nuniform vec4 uBandes[8];\nuniform mat4 uVersTramSol;\nvarying vec3 vTram;\nvarying vec2 vLino;\nvarying vec3 vLinoT, vLinoB;\n' + s.fragmentShader
+      .replace('#include <color_fragment>', `#include <color_fragment>
+      vec3 lino = texture2D(tLino, vLino).rgb;
+      diffuseColor.rgb *= max(0.0, 1.0 + 0.4074 * uLinoMotif * (2.0 * lino.r - 1.0));`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+      roughnessFactor = clamp(roughnessFactor + 0.1012 * uLinoRug * (2.0 * lino.g - 1.0), 0.04, 1.0);`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+      vec3 ln = texture2D(tLinoN, vLino).xyz * 2.0 - 1.0;
+      ln.xy *= uLinoRelief;
+      normal = normalize(vLinoT * ln.x + vLinoB * ln.y + normal * ln.z);`)
+      .replace('vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;',
+        'vec3 totalDiffuse = (reflectedLight.directDiffuse + reflectedLight.indirectDiffuse) * mix(1.0, lino.b, uLinoAO);')
+      // Reflet des bandeaux du plafond : leur lumière est cuite (diffuse seulement), ils ne laissaient aucun reflet.
+      // Dans le repère du métro, on suit le rayon réfléchi jusqu'à la hauteur de chaque bandeau ; plus le sol est
+      // rugueux et le bandeau loin, plus le reflet s'étale (et baisse d'autant). Fresnel : plus fort vu de biais.
+      .replace('vec3 totalSpecular = reflectedLight.directSpecular + reflectedLight.indirectSpecular;', `
+      vec3 totalSpecular = reflectedLight.directSpecular + reflectedLight.indirectSpecular;
+      {
+        vec3 camT = (uVersTramSol * vec4(cameraPosition, 1.0)).xyz;
+        vec3 V = normalize(camT - vTram);
+        vec3 N = normalize(mat3(uVersTramSol) * inverseTransformDirection(normal, viewMatrix));
+        vec3 R = reflect(-V, N);
+        float acc = 0.0;
+        if (R.y > 0.02) for (int i = 0; i < 8; i++) {
+          vec4 b = uBandes[i];
+          if (b.w <= 0.0) continue;
+          float t = (uBandesY[i] - vTram.y) / R.y;
+          vec3 H = vTram + R * t;
+          float d = max(max(b.x - H.x, H.x - b.y), abs(H.z - b.z) - b.w);
+          float flou = 0.01 + roughnessFactor * roughnessFactor * t;
+          acc += (1.0 - smoothstep(-flou, flou, d)) * b.w / (b.w + flou);
+        }
+        float F = 0.04 + 0.96 * pow(1.0 - saturate(dot(N, V)), 5.0);
+        totalSpecular += uRefletBandes * F * min(acc, 1.0);
+      }`)
+  }
+  m.customProgramCacheKey = () => cleAvant.call(m) + (solU.tLino.value && solU.tLinoN.value ? '_lino' : '')
+  matsSol.push(m)
+}
+function majSol() {
+  const p = params.sol
+  if (!p) return
+  for (const m of matsSol) { m.color.set(p.couleur); m.roughness = p.rugosite }
+  solU.uLinoRepet.value = params.train.echelle / p.taille // le modèle est mis à l'échelle : 1 unité = echelle m
+  solU.uLinoMotif.value = p.motif
+  solU.uLinoRug.value = p.rugositeVariation
+  solU.uLinoRelief.value = p.relief
+  solU.uLinoAO.value = p.ao
+  solU.uRefletBandes.value = p.reflet * params.lumieres.plafonniers // aussi lumineux que les bandeaux
+}
 function majLustres() {
   const p = params.lustresReels
   if (!p) return
@@ -840,6 +932,7 @@ function preparerMP89(gltf, renderer) {
     const g = groupeDe(m.name)
     if (g) matsGroupe[g].add(r) // réglé par le panneau « Matières du métro »
     if (g && g !== 'vitres') envDiffus(r) // lumière diffuse de l'env map dosée (« Lustres en vraies lumières »)
+    if (m.name === 'piso') lino(r)
     remplace.set(cle, r)
     return r
   }
@@ -880,8 +973,34 @@ function preparerMP89(gltf, renderer) {
   }
 
   for (const m of remplace.values()) if (m.name === 'luzroja') m.emissiveIntensity = 0.3
+  // Bandeaux du plafond (objets light et light2, deux bandes chacun) : leurs faces tournées vers le bas, dans le
+  // repère du métro, donnent pour chaque bande sa longueur, son milieu, sa demi-largeur et sa hauteur
+  const bandes = []
+  const versScene = gltf.scene.matrixWorld.clone().invert()
+  gltf.scene.traverse((o) => {
+    if (!o.isMesh || (o.name !== 'light' && o.name !== 'light2')) return
+    const M = versScene.clone().multiply(o.matrixWorld), pos = o.geometry.attributes.position, idx = o.geometry.index
+    const cotes = {}
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3()
+    for (let i = 0; i < idx.count; i += 3) {
+      a.fromBufferAttribute(pos, idx.getX(i)).applyMatrix4(M)
+      b.fromBufferAttribute(pos, idx.getX(i + 1)).applyMatrix4(M)
+      c.fromBufferAttribute(pos, idx.getX(i + 2)).applyMatrix4(M)
+      n.subVectors(b, a).cross(c.clone().sub(a)).normalize()
+      if (n.y > -0.3) continue // seulement la face lumineuse, tournée vers le bas
+      const k = Math.sign(a.z + b.z + c.z)
+      const box = (cotes[k] ??= new THREE.Box3())
+      box.expandByPoint(a); box.expandByPoint(b); box.expandByPoint(c)
+    }
+    for (const box of Object.values(cotes)) bandes.push(box)
+  })
+  bandes.slice(0, 8).forEach((box, i) => {
+    solU.uBandes.value[i].set(box.min.x, box.max.x, (box.min.z + box.max.z) / 2, (box.max.z - box.min.z) / 2)
+    solU.uBandesY.value[i] = (box.min.y + box.max.y) / 2
+  })
   envMatieres()
   appliquerMatieres()
+  majSol()
   placerPortes()
   tram = gltf.scene
   group.add(gltf.scene)
@@ -935,6 +1054,7 @@ export function update() {
   uInterieur.value = l.interieur
   appliquerMatieres() // « Intensité générale » agit aussi sur les matières qui ont leur propre env map
   majLustres() // recalcule aussi les ombres : le métro a pu bouger
+  majSol()
 }
 
 // Arrivée jouée en entier : le train sort du tunnel puis freine jusqu'à l'arrêt.
@@ -1043,6 +1163,17 @@ export function addGui(gui) {
   int.add(params.lumieres, 'plafonniers', 0, 10, 0.1).name('Plafonniers').onChange(update)
   int.add(params.lumieres, 'lumierePlafonniers', 0, 1, 0.01).name('Lumière des plafonniers').onChange(update)
   int.add(params.lumieres, 'interieur', 0.5, 4, 0.05).name('Clarté de l\'intérieur').onChange(update)
+  if (MP89) {
+    const so = int.addFolder('Sol (linoléum)')
+    so.addColor(params.sol, 'couleur').name('Couleur').onChange(majSol)
+    so.add(params.sol, 'motif', 0, 2, 0.01).name('Nuances du lino').onChange(majSol)
+    so.add(params.sol, 'rugosite', 0, 1, 0.01).name('Rugosité (0 : lisse)').onChange(majSol)
+    so.add(params.sol, 'rugositeVariation', 0, 2, 0.01).name('Variations de brillance').onChange(majSol)
+    so.add(params.sol, 'relief', 0, 3, 0.01).name('Relief').onChange(majSol)
+    so.add(params.sol, 'ao', 0, 1, 0.01).name('Ombre des micro-creux (AO)').onChange(majSol)
+    so.add(params.sol, 'reflet', 0, 3, 0.01).name('Reflet des bandeaux').onChange(majSol)
+    so.add(params.sol, 'taille', 0.5, 4, 0.05).name('Taille du motif (m)').onChange(majSol)
+  }
 
   // ---- Image finale ----
   const img = gui.addFolder('Image finale')
