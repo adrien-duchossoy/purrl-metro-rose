@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js'
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
+
+// Le métro MP 89 aux couleurs Purrl (survey/scene2/metro/mp89/preparer.py, exporté en
+// public/scene2/mp89.glb). ?tram : l'ancien tram, tel qu'il était.
+const MP89 = !new URLSearchParams(location.search).has('tram')
 
 // Le métro : le tram rose (survey/scene2/metro/tram_rose.blend, exporté en public/scene2/tram.glb,
 // textures 2048 px en WebP). Contrairement à la station, dont la lumière est cuite dans les textures,
@@ -10,7 +15,10 @@ import { HDRLoader } from 'three/addons/loaders/HDRLoader.js'
 // Le métro arrive du tunnel, derrière le mur du fond (z = 0), et avance vers les z négatifs.
 export const params = {
   // porte : numéro de la porte placée pile au centre de l'écran en fin de rotation (0 : position libre, z)
-  train: { x: 2.275, y: -0.47, z: -35.825, rotation: 90, echelle: 1.25, porte: 4 },
+  // MP 89 : placement réglé à l'œil dans le panneau (02/11), agrandi de 1,435 par rapport à la taille réelle
+  train: MP89
+    ? { x: 2.355, y: 0.04, z: -34.226, rotation: 90, echelle: 1.435, porte: 3 }
+    : { x: 2.275, y: -0.47, z: -35.825, rotation: 90, echelle: 1.25, porte: 4 },
   arrivee: {
     avancee: 1, // 0 : caché dans le tunnel ; 1 : à la position d'arrêt
     vitesse: 45, // km/h en sortant du tunnel (un métro entre en station vers 40-50 km/h)
@@ -76,7 +84,10 @@ let cameraZ = null // position de la caméra le long du quai : le centre de l'é
 
 // Milieu de chaque porte côté quai, le long du tram (en m, dans tram_rose.blend), de la cabine avant
 // (la petite porte, n° 1) à la cabine arrière
-const PORTES = [20.3009, 13.5022, 9.9669, 1.7676, -1.7676, -9.9669, -13.5022, -20.3009]
+// MP 89 : les six portes côté quai, de la cabine vers l'arrière (axe de chaque porte dans mp89.glb)
+const PORTES = MP89
+  ? [10.799, 6.634, 2.452, -3.447, -7.606, -11.788]
+  : [20.3009, 13.5022, 9.9669, 1.7676, -1.7676, -9.9669, -13.5022, -20.3009]
 
 export function setCameraZ(z) { cameraZ = z; update() }
 
@@ -396,7 +407,9 @@ function ombreRetrait(o) {
 
 // Phares avant (aux deux coins du nez, dans tram_rose.blend : x = 22,06 ; y = ±0,95 ; z = 1,02),
 // dans le repère du tram : le nez regarde vers +x
-const PHARES = [new THREE.Vector3(22.1, 1.02, -0.95), new THREE.Vector3(22.1, 1.02, 0.95)]
+const PHARES = MP89 // MP 89 : les deux feux blancs, bas sur le nez
+  ? [new THREE.Vector3(13.9, 0.33, -0.31), new THREE.Vector3(13.9, 0.33, 0.31)]
+  : [new THREE.Vector3(22.1, 1.02, -0.95), new THREE.Vector3(22.1, 1.02, 0.95)]
 const AVANT = new THREE.Vector3(1, 0, 0)
 export function setEclat(x) {
   if (x === eclat) return
@@ -426,7 +439,7 @@ export function boite() {
 const SORTIE = [0, 0.013, 0.049, 0.104, 0.175, 0.259, 0.352, 0.45, 0.55, 0.648, 0.741, 0.825, 0.896, 0.951, 0.987, 1]
 const GLISSE = [0, 0.005, 0.018, 0.04, 0.069, 0.104, 0.145, 0.191, 0.242, 0.295, 0.352, 0.41, 0.47, 0.53, 0.59,
   0.648, 0.705, 0.758, 0.809, 0.855, 0.896, 0.931, 0.96, 0.982, 0.995, 1]
-const COULISSE = 0.73 // m
+const COULISSE = MP89 ? 0.84 : 0.73 // m (MP 89 : un vantail fait 88 cm)
 const IMAGES = 80
 const DUREE_PORTES = IMAGES / 24 // secondes, ouverture complète à la vitesse du fichier
 let portes = [] // { o, base, sens (±1 le long du tram), sortie (m) }
@@ -490,6 +503,13 @@ export function load(scene, renderer, manager) {
   const loader = new HDRLoader(manager)
   loader.load('scene2/envmap.hdr', (t) => { envMat.uniforms.tFull.value = t; majEnv() })
   loader.load('scene2/envmap_base.hdr', (t) => { envMat.uniforms.tBase.value = t; majEnv() })
+
+  if (MP89) {
+    const loader = new GLTFLoader(manager)
+    loader.setDRACOLoader(new DRACOLoader(manager).setDecoderPath('draco/'))
+    loader.load(`scene2/mp89.glb?v=${Date.now()}`, (gltf) => preparerMP89(gltf, renderer))
+    return
+  }
 
   // Téléphone : textures en 2048 (1024 pour les cartes techniques). En 4096, Safari iOS dépassait sa mémoire
   // et fermait la page (« Un problème récurrent est survenu »)
@@ -595,6 +615,83 @@ export function load(scene, renderer, manager) {
   })
 }
 
+// ---------- MP 89 ----------
+// Le modèle n'a pas de textures de matière : couleurs unies et une texture de peinture (paint_purrl.png).
+// On garde la même lumière que le tram (env map de la station) et la même peinture vernie.
+const INTERIEUR_MP89 = ['interior', 'metro.001', 'asiento', 'piso', 'pupitre']
+const METAL_MP89 = ['metal', 'metalbogie', 'metalpuerta', 'metal puerta', 'metal.001']
+function preparerMP89(gltf, renderer) {
+  const remplace = new Map()
+  const matiere = (m) => {
+    if (remplace.has(m)) return remplace.get(m)
+    let r = m
+    if (m.name === 'pintura' || m.name === 'puerta') {
+      // Peinture rose : mêmes réglages que la caisse du tram (vernie, métallisée, la station s'y reflète)
+      r = new THREE.MeshPhysicalMaterial({
+        name: m.name, map: m.map, color: m.color,
+        roughness: 0.16, metalness: 0.5, clearcoat: 1, clearcoatRoughness: 0.04,
+      })
+      if (r.map) r.map.anisotropy = renderer.capabilities.getMaxAnisotropy()
+      bordCaisse(r) // pour la clarté de la carrosserie ; aucune ouverture n'est déclarée (bordOuv reste vide)
+    } else if (m.name === 'verre') {
+      // Verre : une seule couche transparente, qui écrit sa distance et marque l'image comme « métro »
+      r = new THREE.MeshStandardMaterial({
+        name: m.name, color: 0x050707, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.3,
+        depthWrite: true, blending: THREE.CustomBlending,
+        blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+        blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneFactor,
+      })
+    } else if (m.name === 'luz') {
+      r = m // plafonniers (et feux avant) : réglés par « Plafonniers de la rame »
+      interieurs.push(m)
+    } else if (INTERIEUR_MP89.includes(m.name)) {
+      eclairerInterieur(m)
+      interieurs.push(m)
+    } else if (METAL_MP89.includes(m.name)) {
+      Object.assign(m, { metalness: 0.6, roughness: 0.4 })
+    }
+    remplace.set(m, r)
+    return r
+  }
+  const vitres = []
+  gltf.scene.traverse((o) => {
+    if (!o.isMesh) return
+    o.material = matiere(o.material)
+    if (o.material.name === 'verre') {
+      o.renderOrder = 1
+      vitres.push(o)
+    }
+  })
+  gltf.scene.updateMatrixWorld(true)
+
+  // Portes côté quai (+z) : chaque vantail a son origine à l'axe de la porte ; le centre de sa géométrie
+  // dit de quel côté il coulisse
+  portes = []
+  gltf.scene.traverse((o) => {
+    if (!o.name.startsWith('mp_door_') || o.position.z <= 0 || !o.parent || o.parent.name.startsWith('mp_door_')) return
+    const centre = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3())
+    portes.push({ o, base: o.position.clone(), sens: Math.sign(centre.x - o.position.x), sortie: 0.06, copies: [], ombre: null })
+  })
+
+  // Reflets des vitres côté quai : copie qui ne contient que le reflet, ajoutée à l'image (comme le tram)
+  for (const o of vitres) {
+    const c = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3())
+    if (c.z < 0.5) continue
+    const r = new THREE.Mesh(o.geometry, refletVitre)
+    r.position.copy(o.position); r.quaternion.copy(o.quaternion); r.scale.copy(o.scale)
+    r.renderOrder = 2
+    o.parent.add(r) // dans le vantail si c'est une vitre de porte : la copie le suit
+  }
+
+  for (const m of remplace.values()) if (m.name === 'luzroja') m.emissiveIntensity = 0.3
+  placerPortes()
+  tram = gltf.scene
+  group.add(gltf.scene)
+  boiteLocale = new THREE.Box3().setFromObject(gltf.scene)
+  demiLongueur = boiteLocale.getSize(new THREE.Vector3()).x / 2
+  update()
+}
+
 // Position de départ : le nez juste derrière le mur du fond, tout le train caché dans le tunnel
 const zTunnel = () => demiLongueur * params.train.echelle + 1
 
@@ -673,12 +770,14 @@ export function addGui(gui) {
   const t = gui.addFolder('Train')
   t.add(params.train, 'x', -3, 5, 0.005).name('Gauche / droite').onChange(update)
   t.add(params.train, 'y', -3, 1, 0.005).name('Hauteur').onChange(update)
-  const portes = { Libre: 0, '1 (petite, cabine)': 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, '8 (cabine arrière)': 8 }
+  const portes = MP89
+    ? { Libre: 0, '1 (cabine)': 1, 2: 2, 3: 3, 4: 4, 5: 5, '6 (arrière)': 6 }
+    : { Libre: 0, '1 (petite, cabine)': 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, '8 (cabine arrière)': 8 }
   t.add(params.train, 'porte', portes).name('Porte au centre').listen().onChange(update)
   t.add(params.train, 'z', -70, 40, 0.005).name('Le long du quai (arrêt)').listen()
     .onChange(() => { params.train.porte = 0; update() }) // bouger le curseur repasse en position libre
   t.add(params.train, 'rotation', -180, 180, 0.5).name('Rotation (°)').onChange(update)
-  t.add(params.train, 'echelle', 1, 2.5, 0.005).name('Échelle').onChange(update)
+  t.add(params.train, 'echelle', 0.5, 2.5, 0.005).name('Échelle').onChange(update)
 
   const a = gui.addFolder('Arrivée')
   a.add(params.arrivee, 'avancee', 0, 1, 0.001).name('Avancée').listen().onChange(update)
