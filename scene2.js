@@ -434,7 +434,7 @@ function setFree(on) {
 }
 
 // ?debug : accès à la caméra depuis la console, pour placer des vues de contrôle
-if (new URLSearchParams(location.search).has('debug')) window.__scene = { camera, controls, setFree, rame, scene }
+if (new URLSearchParams(location.search).has('debug')) window.__scene = { camera, controls, setFree, rame, scene, renderer }
 const gui = new GUI({ title: 'Réglages scène 2' })
 gui.hide()
 const v2 = gui.addFolder('Vue')

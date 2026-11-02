@@ -30,7 +30,7 @@ La scène 2 (arrivée du métro, portes, entrée dans la rame) est **en 3D temps
 - `preparer.py` → `mp89_purrl.blend` et `public/scene2/mp89.glb` (Draco). Retire voie, décor, bogies 1 à 3. Vantaux séparés `mp_door_N_a/_b` (origine à l'axe). Intérieur séparé en objets `…_int` marqués `interieur = 1`. Second jeu d'UV « lumiere » en 3 atlas (caisse, portes, intérieur). Nez vers +x. 134 082 polygones.
 - `cuire_ao.py` (`PARTIES=corps,portes,interieur`) → `mp89_ao.png` (4096), `mp89_ao_portes.png` (2048), `mp89_ao_interieur.png` (4096, 128 échantillons). Puis `lisser_ao.py mp89_ao_interieur.png` (médian 5 px) contre les points noirs.
 - `cuire_plafonniers.py` → `public/scene2/mp89_plafonniers.hdr` (2048, 512 échantillons, environ 15 min, la machine fait du bruit). Monde noir, seule la matière `luz` émet (force 10), passe Diffuse directe + indirecte sans couleur, sur les 36 objets intérieurs. Les bandeaux sont les objets `light` et `light2`.
-- `cuire_lumiere.py` (cuisson de la lumière de la station) : abandonné, sans gain dans Three.js. `mp89_lumiere.hdr` (24 Mo) n'est pas commité.
+- `cuire_lumiere.py` (cuisson de la lumière de la station) : abandonné, sans gain dans Three.js. Son code (`?cuisson`) est retiré ; `mp89_lumiere.hdr` (24 Mo) est rangé dans `scene2/metro/mp89/sauvegardes/`.
 - Lancer Blender en arrière-plan : `/Applications/Blender.app/Contents/MacOS/Blender -b mp89_purrl.blend --python script.py`. `mp89_purrl.blend` n'est pas modifié par les cuissons.
 
 ## Le code
@@ -39,7 +39,7 @@ La scène 2 (arrivée du métro, portes, entrée dans la rame) est **en 3D temps
 - `scene2.js` : ombres PCFSoft, passe finale (tone mapping au choix, saturations, halo, grain), compteur de performance.
 - `brume3d.js` : nappes de brume en 3D, poussées par le train.
 - Panneau : tout fermé par défaut. Vue ; Métro : position et arrivée ; Éclairage du métro ; Matières extérieures ; Intérieur de la rame ; Image finale ; Brume 3D ; « Copier les valeurs ».
-- Performance (M1 Pro) : 48 i/s avec les ombres des lustres, 60 sans.
+- Performance (M1 Pro) : les ombres des lustres ne sont recalculées que si le métro, ses portes ou les lustres changent (`majOmbres` dans `rame.js`, `shadowMap.autoUpdate = false`). À quai : 116 appels de dessin au lieu de 994, image identique (captures 115 à 118). Lumière d'ambiance et lumière principale (« Lumière directe (essais) », à 0) retirées le 2 novembre. Pas encore fait : cache des fichiers (`?v=Date.now()` à remplacer par un numéro de version quand tout sera propre), poids des images pour le téléphone.
 
 ## Ce qui a été essayé et n'a pas marché
 
@@ -53,7 +53,7 @@ La scène 2 (arrivée du métro, portes, entrée dans la rame) est **en 3D temps
 
 ## Lancer et capturer
 
-- `cd survey/metro && npm run dev`, puis http://localhost:5175/?rame (HTTP ; le téléphone se teste sur la version publiée). Options : `?ouv=1` portes ouvertes, `?rame&debut&jouer` rejoue l'arrivée, `?nofps` masque le compteur, `?tram` l'ancien tram, `?cuisson` la lumière de station cuite (essai abandonné), `?nobrume`.
+- `cd survey/metro && npm run dev`, puis http://localhost:5175/?rame (HTTP ; le téléphone se teste sur la version publiée). Options : `?ouv=1` portes ouvertes, `?rame&debut&jouer` rejoue l'arrivée, `?nofps` masque le compteur, `?tram` l'ancien tram, `?nobrume`.
 - `?debug` expose `window.__scene = { camera, controls, setFree, rame, scene }`. Pour entrer dans la rame : cocher « Vue libre (souris) » dans « Vue », puis par exemple `camera.position.set(2.38, 1.55, -35.3)`, `controls.target.set(2.38, 1.1, -40)`, `controls.update()`.
 - Capture : extension Claude in Chrome. Cacher le panneau avec `document.querySelectorAll('.lil-gui.root').forEach(e => e.style.opacity='0')`.
 - Pour régler un contrôle depuis la console, toujours viser son dossier : plusieurs contrôles portent le même nom (« Opacité » existe pour les vitres et pour la brume). Un `import('/brume3d.js')` depuis la console peut donner une autre copie du module que celle de la page : passer par le panneau.

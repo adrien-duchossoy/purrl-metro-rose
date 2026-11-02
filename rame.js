@@ -36,12 +36,6 @@ export const params = {
     lustresCouleur: '#ffffff', // teinte appliquée à la lumière des lustres
     ao: 1, // ombres douces dans les creux (ambient occlusion cuite dans le modèle)
     vitres: 2.5, // force des reflets sur les vitres côté quai
-    ambiance: 0, // lumières génériques en plus de la station (coupées : la station éclaire seule)
-    ambianceCouleur: '#ffe4ee',
-    principale: 0,
-    principaleCouleur: '#fff1f5',
-    azimut: 60, // direction de la lumière principale, en degrés autour du métro
-    hauteur: 50, // en degrés au-dessus de l'horizon
     phares: 10, // intensité des feux avant et arrière
     glare: 1, // éblouissement des phares dans l'objectif (halo, traînée, étoile)
     clarte: 1.3, // éclaircit toute la carrosserie (1 : lumière de la station seule)
@@ -50,18 +44,13 @@ export const params = {
     aoInterieur: 0.5, // ombre cuite de l'intérieur : à pleine force, ses zones fausses font des taches noires
     exposition: 1, // tone mapping Neutral du métro (garde les couleurs) : plus haut, plus lumineux
     tonemapping: 0, // 0 Neutral (garde les couleurs), 1 ACES, 2 AgX, 3 Reinhard : métro seulement
-    // Ombres portées de la lumière principale sur le métro (cadres de fenêtres, rebords, portes)
-    ombres: true,
-    ombreBias: -0.0005,
-    ombreNormalBias: 0.02,
-    ombreTaille: 4096, // taille de la carte d'ombres : plus grande, ombres plus nettes
   },
 }
 
 // Réglages d'Adrien pour le MP 89 (02/11) : le tram garde ses valeurs validées au-dessus
 if (MP89) Object.assign(params.lumieres, {
   reflets: 1.6, station: 0.1, lustres: 0.9, lustresCouleur: '#feeeea', ao: 1, vitres: 6, // ao : au-delà de 1, les raccords de l'ombre cuite se voient
-  clarte: 0.7, plafonniers: 4.8, lumierePlafonniers: 0.3, interieur: 0.95, aoInterieur: 1, aoPlancher: 0, exposition: 0.9, tonemapping: 3,
+  clarte: 0.7, plafonniers: 4.8, lumierePlafonniers: 0.3, interieur: 0.95, aoInterieur: 1, exposition: 0.9, tonemapping: 3,
 })
 // Rendu final de l'image (scene2.js) : grain, halo de lumière autour des zones claires (effet dreamy) et
 // saturation du métro (Reinhard ternit les couleurs : la saturation les ravive)
@@ -130,11 +119,6 @@ function envMatieres() {
 }
 
 export const group = new THREE.Group()
-const ambient = new THREE.AmbientLight()
-const sun = new THREE.DirectionalLight()
-// Ombres : la boîte de la carte d'ombres couvre tout le métro (environ 41 m de long), centrée sur lui
-Object.assign(sun.shadow.camera, { left: -23, right: 23, top: 23, bottom: -23, near: 1, far: 60 })
-sun.shadow.camera.updateProjectionMatrix()
 let tram = null // la scène du glb : repère du tram, non mis à l'échelle
 // Ouvertures de porte côté quai, dans le repère du tram (xmin, xmax, ymin, ymax), pour le bord de la caisse
 const NB_OUV = 8
@@ -173,6 +157,9 @@ export function setCameraZ(z) { cameraZ = z; update() }
 
 // ---------- Env map recombinée ----------
 let envScene = null, envRenderer = null, envPmrem = null, envRT = null
+// Ombres des lustres : calculées du point de vue des lampes, elles ne dépendent pas de la caméra. On ne les
+// recalcule que si le métro bouge, si ses portes bougent ou si les lustres changent (8 fois moins de dessins à quai)
+const majOmbres = () => { if (envRenderer) envRenderer.shadowMap.needsUpdate = true }
 const envMat = new THREE.ShaderMaterial({
   uniforms: { tFull: { value: null }, tBase: { value: null }, uStation: { value: 1 }, uLustres: { value: 1 }, uTeinte: { value: new THREE.Color() } },
   vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
@@ -542,6 +529,7 @@ function placerPortes() {
     if (p.ombre) p.ombre.value = 1 - sortie // sorti de la caisse, le battant n'est plus dans l'ombre
     for (const c of p.copies) c.position.copy(p.o.position)
   }
+  majOmbres()
 }
 
 // Après le geste : au-delà de la moitié, les portes finissent de s'ouvrir seules, sinon elles se referment.
@@ -571,7 +559,7 @@ export function finirOuverture() {
 }
 
 export function load(scene, renderer, manager) {
-  scene.add(group, ambient, sun, sun.target, ...lampes)
+  scene.add(group, ...lampes)
 
   // Reflets et lumière d'ambiance : la station vue à 360° depuis la place du train (survey/scene2/quai.blend,
   // collection « EnvMap (test) ») : la moitié côté tunnel, recopiée en miroir derrière, le trou au-dessus
@@ -581,6 +569,8 @@ export function load(scene, renderer, manager) {
   // dosée et teintée dans le panneau. Les deux sont recombinées puis préparées pour les reflets (PMREM).
   envScene = scene
   envRenderer = renderer
+  renderer.shadowMap.autoUpdate = false
+  majOmbres()
   const loader = new HDRLoader(manager)
   loader.load('scene2/envmap.hdr', (t) => { envMat.uniforms.tFull.value = t; majEnv() })
   loader.load('scene2/envmap_base.hdr', (t) => { envMat.uniforms.tBase.value = t; majEnv() })
@@ -611,21 +601,6 @@ export function load(scene, renderer, manager) {
       t.anisotropy = renderer.capabilities.getMaxAnisotropy()
       t.needsUpdate = true
       uPlafTex.value = t
-    })
-    if (CUISSON) new HDRLoader(manager).load(`scene2/mp89_lumiere.hdr?v=${Date.now()}`, (t) => {
-      t.channel = 1 // second jeu d'UV (TEXCOORD_1)
-      t.flipY = FLIP_LM // test : sens de lecture de la lightmap
-      t.colorSpace = THREE.LinearSRGBColorSpace
-      t.minFilter = THREE.LinearMipmapLinearFilter
-      t.generateMipmaps = true
-      t.needsUpdate = true
-      texCuite = t
-      for (const m of matsCuits) { m.lightMap = t; m.needsUpdate = true }
-      // Test : ?lmdebug affiche la lightmap seule sur les pièces cuites (vérifie qu'elle est lue au bon endroit)
-      if (DEBUG_LM) group.traverse((o) => {
-        if (o.isMesh && o.geometry.attributes.uv1) o.material = new THREE.MeshBasicMaterial({ map: t })
-      })
-      majCuisson()
     })
     return
   }
@@ -739,33 +714,6 @@ export function load(scene, renderer, manager) {
 // On garde la même lumière que le tram (env map de la station) et la même peinture vernie.
 const INTERIEUR_MP89 = ['interior', 'metro.001', 'asiento', 'piso', 'pupitre']
 
-// Lumière cuite : la lumière de la station, calculée dans Blender sur la caisse et les portes du métro à
-// l'arrêt (survey/scene2/metro/mp89/cuire_lumiere.py), dans leur second jeu d'UV. Contrairement à l'env map,
-// elle change d'un point à l'autre : plus forte en haut sous les lustres, plus faible en bas contre le quai,
-// ombres dans les creux. Elle remplace la lumière diffuse de l'env map ; les reflets restent ceux de l'env map.
-// En test : ?cuisson pour l'activer.
-const CUISSON = MP89 && new URLSearchParams(location.search).has('cuisson')
-if (CUISSON) params.cuisson = {
-  force: 1, // intensité de la lumière cuite
-  part: 1, // 0 : lumière de l'env map seule (rendu d'avant) ; 1 : lumière cuite seule
-}
-const DEBUG_LM = new URLSearchParams(location.search).has('lmdebug')
-const FLIP_LM = new URLSearchParams(location.search).has('flip')
-const matsCuits = []
-let texCuite = null
-const uPartCuite = { value: 1 }
-function lumiereCuite(m) {
-  const avant = m.onBeforeCompile, cleAvant = m.customProgramCacheKey
-  m.onBeforeCompile = (s, r) => {
-    avant.call(m, s, r)
-    s.uniforms.uPartCuite = uPartCuite
-    s.fragmentShader = 'uniform float uPartCuite;\n' + s.fragmentShader.replace('#include <lights_fragment_maps>',
-      '#include <lights_fragment_maps>\n  iblIrradiance *= 1.0 - uPartCuite;')
-  }
-  m.customProgramCacheKey = () => cleAvant.call(m) + '_cuit'
-  if (texCuite) m.lightMap = texCuite
-  matsCuits.push(m)
-}
 // Lustres en vraies lumières : les deux lustres au-dessus de la caméra (côté quai) éclairent le métro comme de
 // vraies lampes. Three.js calcule pour chaque point sa distance aux lampes (la lumière baisse avec le carré de
 // la distance : le toit, plus proche, est plus éclairé que le bas de caisse) et les ombres portées.
@@ -810,6 +758,7 @@ function majLustres() {
     l.castShadow = p.actif && p.ombres
   }
   uEnvDiffus.value = p.actif ? p.envDiffus : 1
+  majOmbres()
 }
 
 // Ombre de contact (ambient occlusion) cuite par Cycles (survey/scene2/metro/mp89/cuire_ao.py) : le fond des creux
@@ -824,7 +773,6 @@ const texAO = { corps: null, porte: null, interieur: null }
 const uPlafTex = { value: new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1) }
 uPlafTex.value.needsUpdate = true
 const uPlafForce = { value: 1 }
-const uAOPlancher = { value: 0 }
 function ombreContact(m, partie) {
   // Three.js n'applique l'ombre de contact qu'à la lumière indirecte (station, lumière cuite) : on l'applique
   // aussi à la lumière directe des lustres, qui éclaire le plus le métro, sinon les creux resteraient en pleine lumière
@@ -841,12 +789,6 @@ function ombreContact(m, partie) {
         reflectedLight.directDiffuse += texture2D(tPlaf, vAoMapUv).rgb * uPlaf * diffuseColor.rgb;
       #endif`)
     if (partie === 'interieur') {
-      // Plancher de l'ombre cuite : des faces très fines tournées vers la fente entre assise et dossier
-      // sortent noires dans l'AO cuite (traits noirs sur les sièges) ; on ne les laisse pas descendre sous ce seuil
-      s.fragmentShader = s.fragmentShader.replace('#include <aomap_fragment>',
-        THREE.ShaderChunk.aomap_fragment.replace('texture2D( aoMap, vAoMapUv ).r', 'max( texture2D( aoMap, vAoMapUv ).r, uAOPlancher )'))
-      s.uniforms.uAOPlancher = uAOPlancher
-      s.fragmentShader = 'uniform float uAOPlancher;\n' + s.fragmentShader
       s.defines = { ...s.defines, PLAFONNIERS: '' }
       s.uniforms.tPlaf = uPlafTex
       s.uniforms.uPlaf = uPlafForce
@@ -857,14 +799,6 @@ function ombreContact(m, partie) {
   if (texAO[partie]) m.aoMap = texAO[partie]
   matsAO[partie].push(m)
   aoMats.push(m)
-}
-
-function majCuisson() {
-  const c = params.cuisson
-  if (!c) return
-  uPartCuite.value = c.part
-  // La lumière cuite par Blender (passe « Diffuse ») est une luminance : Three.js attend un éclairement (× π)
-  for (const m of matsCuits) m.lightMapIntensity = Math.PI * c.force * c.part
 }
 
 function preparerMP89(gltf, renderer) {
@@ -901,7 +835,6 @@ function preparerMP89(gltf, renderer) {
     // et sur l'intérieur cette ombre était fausse et grossière (taches noires autour des portes)
     const exterieur = groupeDe(m.name) && !['vitres', 'interieur'].includes(groupeDe(m.name))
     if (cuit && m.name !== 'verre') {
-      if (CUISSON) lumiereCuite(r)
       if (partie === 'interieur' || exterieur) ombreContact(r, partie)
     }
     const g = groupeDe(m.name)
@@ -913,7 +846,7 @@ function preparerMP89(gltf, renderer) {
   const vitres = []
   gltf.scene.traverse((o) => {
     if (!o.isMesh) return
-    o.castShadow = o.receiveShadow = true // ombres de la lumière principale
+    o.castShadow = o.receiveShadow = true // ombres des lustres
     let partie = 'corps'
     for (let p = o; p; p = p.parent) {
       if (p.name.startsWith('mp_door_')) partie = 'porte'
@@ -949,7 +882,6 @@ function preparerMP89(gltf, renderer) {
   for (const m of remplace.values()) if (m.name === 'luzroja') m.emissiveIntensity = 0.3
   envMatieres()
   appliquerMatieres()
-  majCuisson()
   placerPortes()
   tram = gltf.scene
   group.add(gltf.scene)
@@ -994,31 +926,15 @@ export function update() {
 
   const l = params.lumieres
   if (group.parent) group.parent.environmentIntensity = l.reflets
-  ambient.intensity = l.ambiance
-  ambient.color.set(l.ambianceCouleur)
-  sun.intensity = l.principale
-  sun.color.set(l.principaleCouleur)
-  const az = THREE.MathUtils.degToRad(l.azimut), el = THREE.MathUtils.degToRad(l.hauteur)
-  sun.target.position.copy(group.position)
-  sun.position.copy(group.position).add(new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)).multiplyScalar(20))
   for (const m of lit) m.emissiveIntensity = l.phares * eclat
-  sun.castShadow = l.ombres && l.principale > 0
-  sun.shadow.bias = l.ombreBias
-  sun.shadow.normalBias = l.ombreNormalBias
-  if (sun.shadow.mapSize.x !== l.ombreTaille) {
-    sun.shadow.mapSize.set(l.ombreTaille, l.ombreTaille)
-    sun.shadow.map?.dispose(); sun.shadow.map = null
-  }
   for (const m of aoMats) m.aoMapIntensity = l.ao
   refletVitre.envMapIntensity = l.vitres
   bordOuv.uClarte.value = l.clarte
   for (const m of interieurs) { m.emissiveIntensity = l.plafonniers; m.aoMapIntensity = l.aoInterieur }
   uPlafForce.value = l.lumierePlafonniers ?? 0
-  uAOPlancher.value = l.aoPlancher ?? 0
   uInterieur.value = l.interieur
   appliquerMatieres() // « Intensité générale » agit aussi sur les matières qui ont leur propre env map
-  majCuisson()
-  majLustres()
+  majLustres() // recalcule aussi les ombres : le métro a pu bouger
 }
 
 // Arrivée jouée en entier : le train sort du tunnel puis freine jusqu'à l'arrêt.
@@ -1087,26 +1003,9 @@ export function addGui(gui) {
   const o = ecl.addFolder('Ombres cuites dans les creux')
   o.add(params.lumieres, 'ao', 0, 2, 0.05).name('Extérieur (1 : calculé)').onChange(update)
   o.add(params.lumieres, 'aoInterieur', 0, 1, 0.05).name('Intérieur').onChange(update)
-  o.add(params.lumieres, 'aoPlancher', 0, 1, 0.01).name('Intérieur : plancher (0 : aucun)').onChange(update)
   const ph = ecl.addFolder('Phares')
   ph.add(params.lumieres, 'phares', 0, 20, 0.1).name('Intensité')
   ph.add(params.lumieres, 'glare', 0, 3, 0.05).name('Éblouissement').onChange(update)
-  const l = ecl.addFolder('Lumière directe (essais)')
-  l.add(params.lumieres, 'ambiance', 0, 3, 0.05).name('Ambiance').onChange(update)
-  l.addColor(params.lumieres, 'ambianceCouleur').name('Couleur ambiance').onChange(update)
-  l.add(params.lumieres, 'principale', 0, 6, 0.05).name('Principale').onChange(update)
-  l.addColor(params.lumieres, 'principaleCouleur').name('Couleur principale').onChange(update)
-  l.add(params.lumieres, 'azimut', -180, 180, 1).name('Direction (°)').onChange(update)
-  l.add(params.lumieres, 'hauteur', 0, 90, 1).name('Hauteur (°)').onChange(update)
-  l.add(params.lumieres, 'ombres').name('Ombres portées').onChange(update)
-  l.add(params.lumieres, 'ombreBias', -0.01, 0.01, 0.0001).name('Ombres : bias').onChange(update)
-  l.add(params.lumieres, 'ombreNormalBias', 0, 0.1, 0.001).name('Ombres : normal bias').onChange(update)
-  l.add(params.lumieres, 'ombreTaille', { 1024: 1024, 2048: 2048, 4096: 4096 }).name('Ombres : netteté').onChange(update)
-  if (CUISSON) {
-    const c = ecl.addFolder('Lumière cuite (essai)')
-    c.add(params.cuisson, 'part', 0, 1, 0.01).name('Part (0 : avant, 1 : cuite)').onChange(majCuisson)
-    c.add(params.cuisson, 'force', 0, 3, 0.01).name('Intensité').onChange(majCuisson)
-  }
 
   // ---- Matières ----
   const M = params.matieres
