@@ -1,9 +1,8 @@
 import { defineConfig } from 'vite'
-import basicSsl from '@vitejs/plugin-basic-ssl'
 
-// HTTPS obligatoire : sans lui, l'iPhone refuse l'accès au gyroscope
+// Serveur local en simple HTTP (localhost est un contexte sûr pour le navigateur de l'ordinateur).
+// Sur téléphone, le gyroscope exige HTTPS : on teste sur la version publiée sur GitHub Pages.
 export default defineConfig({
   base: './', // chemins relatifs : le site marche aussi dans un sous-dossier (GitHub Pages)
-  plugins: [basicSsl()],
-  server: { https: true, host: true, port: 5175 },
+  server: { host: true, port: 5175 },
 })

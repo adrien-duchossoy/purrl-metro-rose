@@ -18,6 +18,9 @@ const FRAME_AR = 2752 / 1536 // format de la photo de la scène 1
 
 const canvas = document.getElementById('gl2')
 const renderer = new THREE.WebGLRenderer({ canvas })
+// Ombres portées sur le métro (rame.js : lustres et lumière principale)
+renderer.shadowMap.enabled = true
+renderer.shadowMap.type = THREE.PCFSoftShadowMap
 // Résolution adaptative : on part de la pleine résolution (2 au plus) et on la baisse par crans si l'appareil
 // ne suit pas (voir adapter()). Tout le rendu est calculé par pixel : c'est le réglage qui pèse le plus.
 const DPR_MAX = Math.min(devicePixelRatio || 1, 2)
@@ -187,6 +190,42 @@ const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, sa
 target.depthTexture = new THREE.DepthTexture(1, 1)
 brume3d.init(target.depthTexture, camera)
 
+// ---------- Halo de lumière (bloom) : les zones claires rayonnent doucement, effet dreamy ----------
+// Les pixels plus clairs que le seuil sont isolés dans une image au quart de la résolution, floutés deux fois
+// (horizontal puis vertical), puis ajoutés en « écran » à l'image finale
+const bloomRT = [0, 1].map(() => new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }))
+function passe(frag, uniforms) {
+  const m = new THREE.ShaderMaterial({
+    glslVersion: THREE.GLSL3, depthTest: false, depthWrite: false, uniforms, fragmentShader: frag,
+    vertexShader: 'out vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  })
+  const sc = new THREE.Scene()
+  sc.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), m))
+  return { m, sc }
+}
+const passeSeuil = passe(`precision highp float; in vec2 vUv; out vec4 o; uniform sampler2D t; uniform float uSeuil;
+  void main() { vec3 c = texture(t, vUv).rgb; float l = max(c.r, max(c.g, c.b));
+    o = vec4(c * smoothstep(uSeuil, uSeuil + 0.5, l), 1.0); }`, { t: { value: target.texture }, uSeuil: { value: 1 } })
+const passeFlou = passe(`precision highp float; in vec2 vUv; out vec4 o; uniform sampler2D t; uniform vec2 uDir;
+  void main() { const float W[5] = float[5](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+    vec3 c = texture(t, vUv).rgb * W[0];
+    for (int i = 1; i < 5; i++) { c += (texture(t, vUv + uDir * float(i)).rgb + texture(t, vUv - uDir * float(i)).rgb) * W[i]; }
+    o = vec4(c, 1.0); }`, { t: { value: null }, uDir: { value: new THREE.Vector2() } })
+function halo() {
+  const r = rame.params.rendu
+  if (r.halo <= 0) return
+  passeSeuil.m.uniforms.uSeuil.value = r.seuil
+  renderer.setRenderTarget(bloomRT[0])
+  renderer.render(passeSeuil.sc, postCam)
+  const w = bloomRT[0].width, h = bloomRT[0].height, f = passeFlou.m.uniforms
+  for (let i = 1; i <= 2; i++) {
+    f.t.value = bloomRT[0].texture; f.uDir.value.set((r.rayon * i) / w, 0)
+    renderer.setRenderTarget(bloomRT[1]); renderer.render(passeFlou.sc, postCam)
+    f.t.value = bloomRT[1].texture; f.uDir.value.set(0, (r.rayon * i) / h)
+    renderer.setRenderTarget(bloomRT[0]); renderer.render(passeFlou.sc, postCam)
+  }
+}
+
 const post = new THREE.ShaderMaterial({
   glslVersion: THREE.GLSL3,
   depthTest: false,
@@ -209,6 +248,12 @@ const post = new THREE.ShaderMaterial({
     uPhare: { value: [new THREE.Vector4(), new THREE.Vector4()] }, // x, y à l'écran (0 à 1), distance, intensité
     uAspect: { value: 1 },
     uExpo: { value: 1 },
+    uTone: { value: 0 }, // 0 Neutral, 1 ACES, 2 AgX, 3 Reinhard (métro seulement)
+    tHalo: { value: bloomRT[0].texture },
+    uHalo: { value: 0 },
+    uGrain: { value: 0 },
+    uSat: { value: 1 },
+    uSatImage: { value: 1 },
   },
   vertexShader: /* glsl */ `
     out vec2 vUv;
@@ -224,6 +269,9 @@ const post = new THREE.ShaderMaterial({
     uniform vec2 uOffset;
     #define STOP_NUAGES
     uniform float uStop, uAspect, uExpo;
+    uniform int uTone;
+    uniform sampler2D tHalo;
+    uniform float uHalo, uGrain, uSat, uSatImage;
     uniform vec4 uPhare[2];
 
     ${FOG_GLSL}
@@ -265,6 +313,36 @@ const post = new THREE.ShaderMaterial({
       color *= newPeak / peak;
       return mix(color, vec3(newPeak), 1.0 - 1.0 / (DESAT * (peak - newPeak) + 1.0));
     }
+    // Autres tone mappings, au choix dans le panneau (repris de Three.js) : ACES (contraste « film »),
+    // AgX (contraste doux, couleurs vives gardées), Reinhard (plus lavé, façon photo)
+    vec3 aces(vec3 color) {
+      const mat3 IN = mat3(vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383), vec3(0.04823, 0.01566, 0.83777));
+      const mat3 OUT = mat3(vec3(1.60475, -0.10208, -0.00327), vec3(-0.53108, 1.10813, -0.07276), vec3(-0.07367, -0.00605, 1.07602));
+      color *= uExpo / 0.6;
+      color = IN * color;
+      vec3 a = color * (color + 0.0245786) - 0.000090537;
+      vec3 b = color * (0.983729 * color + 0.4329510) + 0.238081;
+      return clamp(OUT * (a / b), 0.0, 1.0);
+    }
+    vec3 agx(vec3 color) {
+      const mat3 IN = mat3(0.856627153315983, 0.137318972929847, 0.11189821299995, 0.0951212405381588, 0.761241990602591, 0.0767994186031903, 0.0482516061458583, 0.101439036467562, 0.811302368396859);
+      const mat3 OUT = mat3(1.1271005818144368, -0.1413297634984383, -0.14132976349843826, -0.11060664309660323, 1.157823702216272, -0.11060664309660294, -0.016493938717834573, -0.016493938717834257, 1.2519364065950405);
+      const float MINEV = -12.47393, MAXEV = 4.026069;
+      color *= uExpo;
+      color = IN * max(color, 1e-10);
+      color = clamp((log2(color) - MINEV) / (MAXEV - MINEV), 0.0, 1.0);
+      vec3 x2 = color * color, x4 = x2 * x2;
+      color = 15.5 * x4 * x2 - 40.14 * x4 * color + 31.96 * x4 - 6.868 * x2 * color + 0.4298 * x2 + 0.1191 * color - 0.00232;
+      color = OUT * color;
+      return clamp(pow(max(vec3(0.0), color), vec3(2.2)), 0.0, 1.0);
+    }
+    vec3 reinhard(vec3 color) { color *= uExpo; return clamp(color / (vec3(1.0) + color), 0.0, 1.0); }
+    vec3 toneMap(vec3 c) {
+      if (uTone == 1) return aces(c);
+      if (uTone == 2) return agx(c);
+      if (uTone == 3) return reinhard(c);
+      return neutral(c);
+    }
     vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 
     // Profondeur façon scène 1 (0 loin, 1 près) à partir d'une distance en mètres,
@@ -280,7 +358,12 @@ const post = new THREE.ShaderMaterial({
     void main() {
       // Les calculs de brume se font comme en scène 1, sur des couleurs sRGB
       vec4 src = texture(tColor, vUv);
-      vec3 col = toSRGB(mix(src.rgb, neutral(src.rgb), clamp(src.a, 0.0, 1.0)));
+      float estMetro = clamp(src.a, 0.0, 1.0);
+      vec3 lin = mix(src.rgb, toneMap(src.rgb), estMetro);
+      // Saturation du métro seulement (la station garde les couleurs de la photo)
+      float lum = dot(lin, vec3(0.2126, 0.7152, 0.0722));
+      lin = mix(lin, max(mix(vec3(lum), lin, uSat), 0.0), estMetro);
+      vec3 col = toSRGB(lin);
 
       // Direction du regard pour ce pixel, et distance du décor dans cette direction
       vec4 vp = uProjInv * vec4(vUv * 2.0 - 1.0, -1.0, 1.0);
@@ -310,6 +393,14 @@ const post = new THREE.ShaderMaterial({
       vec4 puffs = texture(tPuffs, vUv);
       col = col * (1.0 - puffs.a) + puffs.rgb;
       col += glare(vUv, uPhare[0]) + glare(vUv, uPhare[1]);
+      // Halo de lumière, ajouté en « écran » (n'éclaircit jamais au-delà du blanc)
+      vec3 h = toSRGB(min(texture(tHalo, vUv).rgb * uHalo, vec3(1.0)));
+      col = 1.0 - (1.0 - col) * (1.0 - h);
+      // Saturation de toute l'image
+      col = max(mix(vec3(dot(col, vec3(0.2126, 0.7152, 0.0722))), col, uSatImage), 0.0);
+      // Grain, différent à chaque image
+      float g = fract(sin(dot(gl_FragCoord.xy + fract(uTime * 7.0) * 517.0, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+      col += g * uGrain;
       fragColor = vec4(col, 1.0);
     }`,
 })
@@ -350,6 +441,13 @@ v2.add(view, 'libre').name('Vue libre (souris)').onChange(setFree)
 v2.add(view, 'brume').name('Brume visible')
 v2.add({ sequence: () => sequence().then(portesAuGeste) }, 'sequence').name('▶ Rejouer la séquence')
 rame.addGui(gui)
+const rg = gui.addFolder('Rendu final (grain, halo, saturation)')
+rg.add(rame.params.rendu, 'grain', 0, 0.2, 0.005).name('Grain')
+rg.add(rame.params.rendu, 'halo', 0, 2, 0.01).name('Halo de lumière (lens glare)')
+rg.add(rame.params.rendu, 'seuil', 0, 3, 0.01).name('Seuil du halo')
+rg.add(rame.params.rendu, 'rayon', 0.5, 6, 0.1).name('Étendue du halo')
+rg.add(rame.params.rendu, 'saturation', 0, 3, 0.01).name('Saturation du métro')
+rg.add(rame.params.rendu, 'saturationImage', 0, 2, 0.01).name('Saturation de toute l\'image')
 brume3d.addGui(gui)
 gui.add({
   copier() {
@@ -446,6 +544,12 @@ function render(now = performance.now()) {
   view.rotation = k
   majPhares()
   u.uExpo.value = rame.params.lumieres.exposition
+  u.uTone.value = rame.params.lumieres.tonemapping
+  const rd = rame.params.rendu
+  u.uHalo.value = rd.halo
+  u.uGrain.value = rd.grain
+  u.uSat.value = rd.saturation
+  u.uSatImage.value = rd.saturationImage
   u.uProjInv.value.copy(camera.projectionMatrixInverse)
   u.uCamWorld.value.copy(camera.matrixWorld)
 
@@ -456,6 +560,7 @@ function render(now = performance.now()) {
   brume3d.update(lastFrame === null ? 0 : Math.min(0.1, (now - lastFrame) / 1000), time, rame.boite())
   lastFrame = now
   brume3d.render(renderer, camera)
+  halo()
   renderer.setRenderTarget(null)
   renderer.render(postScene, postCam)
 }
@@ -546,6 +651,7 @@ function resize() {
   if (view.libre) { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix() }
   const size = renderer.getDrawingBufferSize(new THREE.Vector2())
   target.setSize(size.x, size.y)
+  for (const rt of bloomRT) rt.setSize(Math.max(1, size.x >> 2), Math.max(1, size.y >> 2)) // halo au quart
   brume3d.setSize(size.x, size.y)
   render()
 }
