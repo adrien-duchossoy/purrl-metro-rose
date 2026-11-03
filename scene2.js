@@ -123,7 +123,7 @@ export function avancerAuGeste() {
   stopAvance()
   preparerEntree()
   stopAvance = avancer({
-    actif: () => !view.libre && camFinPrete,
+    actif: () => !view.libre && camFinPrete && rame.params.portes.ouverture >= 1, // portes refermées : on reste sur le quai
     onAvance: avancerDe,
     onTourne: tournerDe,
     onPas: (d) => {
@@ -631,19 +631,22 @@ let stopGeste = () => {}
 export function portesAuGeste() {
   stopGeste() // une seule écoute à la fois (séquence rejouée depuis le panneau)
   return new Promise((resolve) => {
-    if (rame.params.portes.ouverture >= 1) return resolve() // déjà ouvertes (?ouv=1)
+    let ouvertes = rame.params.portes.ouverture >= 1
+    if (ouvertes) resolve() // déjà ouvertes (?ouv=1) : on écoute quand même, pour pouvoir les refermer
     let depart = null
-    const stop = (stopGeste = ecarter({
-      actif: () => !view.libre,
+    // Le geste inverse (rapprocher les doigts, glisser vers la gauche) les referme, tant qu'on est sur le quai :
+    // une fois la caméra engagée vers la rame, elles restent ouvertes
+    stopGeste = ecarter({
+      actif: () => !view.libre && entree.avanceCible === 0 && entree.avance < 0.01,
       onMove: (p) => {
         if (depart === null) depart = rame.params.portes.ouverture // on reprend où en sont les portes
         rame.setOuverture(depart + p)
       },
       onEnd: async () => {
         depart = null
-        if (await rame.finirOuverture()) { stop(); resolve() }
+        if ((await rame.finirOuverture()) && !ouvertes) { ouvertes = true; resolve() }
       },
-    }))
+    })
   })
 }
 

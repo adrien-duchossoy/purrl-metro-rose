@@ -26,10 +26,11 @@ export function ecarter({ onMove, onEnd, actif = () => true }) {
   function move(e) {
     if (depart === null) return
     if (e.pointerType === 'mouse') {
-      onMove((e.clientX - depart) / (innerWidth * 0.4)) // 40 % de la largeur d'écran : geste complet
+      onMove((e.clientX - depart) / (innerWidth * 0.28)) // 28 % de la largeur d'écran : geste complet
     } else if (doigts.has(e.pointerId)) {
       doigts.set(e.pointerId, { x: e.clientX, y: e.clientY })
-      if (doigts.size === 2) onMove((ecart() - depart) / (Math.min(innerWidth, innerHeight) * 0.5))
+      // Doigts écartés d'un tiers environ de la largeur de l'écran : geste complet (la moitié avant le 03/11, trop long)
+      if (doigts.size === 2) onMove((ecart() - depart) / (Math.min(innerWidth, innerHeight) * 0.35))
     }
   }
 
@@ -98,13 +99,19 @@ export function avancer({ onAvance, onTourne, onPas, actif = () => true }) {
   }
 
   let doigt = null // secours tactile : un doigt qui glisse vers le haut
-  const down = (e) => { if (e.pointerType !== 'mouse' && actif() && !e.target.closest?.(IGNORE)) doigt = { id: e.pointerId, y: e.clientY } }
+  const poses = new Set() // doigts posés : à deux, c'est un pincement (portes), pas un pas en avant
+  const down = (e) => {
+    if (e.pointerType === 'mouse') return
+    poses.add(e.pointerId)
+    if (poses.size > 1) { doigt = null; return }
+    if (actif() && !e.target.closest?.(IGNORE)) doigt = { id: e.pointerId, y: e.clientY }
+  }
   const move = (e) => {
     if (doigt?.id !== e.pointerId) return
     onPas((doigt.y - e.clientY) / (innerHeight * 0.6))
     doigt.y = e.clientY
   }
-  const up = (e) => { if (doigt?.id === e.pointerId) doigt = null }
+  const up = (e) => { poses.delete(e.pointerId); if (doigt?.id === e.pointerId) doigt = null }
 
   addEventListener('deviceorientation', orientation)
   addEventListener('wheel', molette, { passive: true })
