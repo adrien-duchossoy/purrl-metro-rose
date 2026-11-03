@@ -253,7 +253,8 @@ let hasPrev = false
 const tv = new THREE.Vector3()
 
 // box : boîte du métro dans la station (null s'il n'est pas chargé)
-export function update(dt, time, box) {
+// emettre : faux une fois les portes ouvertes ; plus aucune nappe ne naît, celles déjà là continuent leur vie
+export function update(dt, time, box, emettre = true) {
   mat.uniforms.uTime.value = time
   mat.uniforms.uOpacity.value = params.opacite
   mat.uniforms.uSparkle.value = params.paillettes
@@ -294,6 +295,7 @@ export function update(dt, time, box) {
     emisRideau += (force < 1 ? (2 * params.rideau / params.montee) * Math.max(0.05, Math.sqrt(force)) : params.rideauFlux) * dt
     while (emisRideau >= 1) { emisRideau -= 1; rideauEmis++; rideau(force) }
   } else if (box) rideauEmis = 0 // sorti : au prochain passage, l'air chassera de nouveau la brume
+  if (!emettre) emis = emisRideau = 0
   while (emis >= 1) {
     emis -= 1
     if (box && s > 0.5 && nose > -14) {

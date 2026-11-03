@@ -193,7 +193,11 @@ export function setCameraZ(z) { cameraZ = z; update() }
 let envScene = null, envRenderer = null, envPmrem = null, envRT = null
 // Ombres des lustres : calculées du point de vue des lampes, elles ne dépendent pas de la caméra. On ne les
 // recalcule que si le métro bouge, si ses portes bougent ou si les lustres changent (8 fois moins de dessins à quai)
-const majOmbres = () => { if (envRenderer) envRenderer.shadowMap.needsUpdate = true }
+const majOmbres = () => { if (envRenderer) envRenderer.shadowMap.needsUpdate = true; changement = true }
+// Quelque chose a changé dans le métro (position, portes, lumières, matières) : scene2.js recalcule l'image 3D.
+// Sinon, quand rien ne bouge, il réutilise la dernière image (scène finale à 60 i/s)
+let changement = true
+export function prendreChangement() { const c = changement; changement = false; return c }
 const envMat = new THREE.ShaderMaterial({
   uniforms: { tFull: { value: null }, tBase: { value: null }, uStation: { value: 1 }, uLustres: { value: 1 }, uTeinte: { value: new THREE.Color() } },
   vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
@@ -232,6 +236,7 @@ function majEnv() {
     envScene.environment = envPmrem.fromEquirectangular(envRT.texture).texture
     envMatieres()
     ancien?.dispose()
+    changement = true
   }, 60)
 }
 
@@ -249,6 +254,18 @@ function sansSpots(m) {
   m.customProgramCacheKey = () => 'sansSpots'
 }
 sansSpots(refletVitre)
+// Même chose pour la carrosserie, en gardant ses propres modifications de shader : les spots sont dans la rame et
+// n'éclairent pas l'extérieur (il leur tourne le dos), mais vue du quai la caisse couvre une grande partie de
+// l'écran et chaque pixel relisait les 8 cartes d'ombre (17 ms par image au lieu de 8, mesuré le 03/11)
+function sansSpotsDehors(m) {
+  const avant = m.onBeforeCompile, cleAvant = m.customProgramCacheKey
+  m.onBeforeCompile = (s, r) => {
+    avant.call(m, s, r)
+    s.fragmentShader = s.fragmentShader.replace('#include <lights_fragment_begin>',
+      THREE.ShaderChunk.lights_fragment_begin.replace('#if ( NUM_SPOT_LIGHTS > 0 )', '#if 0'))
+  }
+  m.customProgramCacheKey = () => cleAvant.call(m) + '_sansSpots'
+}
 
 // Matières de la carrosserie. Le fichier exporté donne une rugosité de 0 et une métallicité de 0,5 partout
 // (sa carte de rugosité est vide) : tout le métro devenait un miroir chromé. On recalcule une carte par zone
@@ -1113,7 +1130,7 @@ function preparerMP89(gltf, renderer) {
   const plaques = []
   gltf.scene.traverse((o) => { if (o.isMesh && o.parent?.name === 'union' && o.material.name === 'interior') plaques.push(o) })
   for (const o of plaques) o.removeFromParent()
-  const vitres = []
+  const vitres = [], dehors = new Set(), dedans = new Set()
   gltf.scene.traverse((o) => {
     if (!o.isMesh) return
     o.castShadow = o.receiveShadow = true // ombres des lustres
@@ -1124,11 +1141,14 @@ function preparerMP89(gltf, renderer) {
       if (p.userData.interieur) partie = 'interieur'
     }
     o.material = matiere(o.material, !!o.geometry.attributes.uv1, partie, siege)
+    ;(partie === 'corps' ? dehors : dedans).add(o.material)
     if (o.material.name === 'verre') {
       o.renderOrder = 1
       vitres.push(o)
     }
   })
+  // Spots retirés des matières de la carrosserie seulement (pas de celles que partagent l'intérieur ou les portes)
+  for (const m of dehors) if (!dedans.has(m) && m.name !== 'verre') sansSpotsDehors(m)
   gltf.scene.updateMatrixWorld(true)
 
   // Portes côté quai (+z) : chaque vantail a son origine à l'axe de la porte ; le centre de sa géométrie

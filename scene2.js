@@ -438,6 +438,7 @@ function setFree(on) {
 // ?debug : accès à la caméra depuis la console, pour placer des vues de contrôle
 if (new URLSearchParams(location.search).has('debug')) window.__scene = { camera, controls, setFree, rame, scene, renderer }
 const gui = new GUI({ title: 'Réglages scène 2' }) // toujours visible (demande d'Adrien, 02/11)
+gui.onChange(() => { imageSale = true }) // un réglage touché : l'image 3D est recalculée
 const v2 = gui.addFolder('Vue')
 v2.add(view, 'rotation', 0, 1, 0.001).name('Rotation caméra').listen().onChange((x) => { k = x })
 v2.add(view, 'libre').name('Vue libre (souris)').onChange(setFree)
@@ -554,14 +555,24 @@ function render(now = performance.now()) {
 
   adapter(now)
   if (PERF) perf(now)
-  renderer.setRenderTarget(target)
-  renderer.render(scene, camera)
   // Dans la rame (la caméra a passé la porte), la brume n'est plus calculée : elle s'efface entre 40 et 60 %
   // de l'avancée vers l'intérieur
   const dehors = camFinPrete ? 1 - THREE.MathUtils.smoothstep(entree.avance, 0.4, 0.6) : 1
+  // Image 3D calculée une fois puis réutilisée tant que rien ne change (scène finale immobile : 60 i/s au lieu de 30).
+  // Recalculée si la caméra bouge, si le métro, ses portes, ses lumières ou un réglage changent, si la brume est
+  // visible (elle s'anime), pendant le chargement et après un changement de taille. Grain et halo : à chaque image.
+  const rameChange = rame.prendreChangement()
+  const camBouge = !camAvant.equals(camera.matrixWorld) || !projAvant.equals(camera.projectionMatrix)
+  if (imageSale || rameChange || camBouge || dehors > 0 || !chargee) {
+    renderer.setRenderTarget(target)
+    renderer.render(scene, camera)
+    camAvant.copy(camera.matrixWorld)
+    projAvant.copy(camera.projectionMatrix)
+    imageSale = false
+  }
   u.uBrume.value = dehors
   if (dehors > 0) {
-    brume3d.update(lastFrame === null ? 0 : Math.min(0.1, (now - lastFrame) / 1000), time, rame.boite())
+    brume3d.update(lastFrame === null ? 0 : Math.min(0.1, (now - lastFrame) / 1000), time, rame.boite(), rame.params.portes.ouverture === 0)
     brume3d.render(renderer, camera)
   }
   lastFrame = now
@@ -651,7 +662,11 @@ const tick = () => {
 }
 tick()
 
+let imageSale = true, chargee = false
+const camAvant = new THREE.Matrix4(), projAvant = new THREE.Matrix4()
+ready.then(() => setTimeout(() => { chargee = true; imageSale = true }, 3000)) // textures et bakes posés
 function resize() {
+  imageSale = true
   renderer.setSize(innerWidth, innerHeight, false)
   if (view.libre) { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix() }
   const size = renderer.getDrawingBufferSize(new THREE.Vector2())
