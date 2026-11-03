@@ -17,11 +17,15 @@ export const params = {
   actifs: true,
   nombre: 700,
   taille: 0.5, // diamètre du corps, en m du repère du métro (× 1,435 à l'écran : 72 cm)
-  rose: '#ffb8dc',
-  bleu: '#b8dcff',
-  argent: '#f3f4f8',
+  rose: '#f7cfdc', // rose pastel, proche de la caisse
+  bleu: '#cfe2f2', // bleu pastel, proche du filet sous les fenêtres (#d0dee4)
+  argent: '#e6e9ee', // presque neutre, à peine froid : la station rose réchauffait l'aluminium jusqu'au doré
+  argentClarte: 2.4, // l'argent reflète la station en gris : un peu plus clair pour rester brillant
+  argentRugosite: 0.15, // l'argent a sa propre matière : vrai métal, sans éclat de couleur (sinon il passait pour du bleu)
   rugosite: 0.22,
-  refletsRame: 0.6, // reflets de la station sur les ballons restés dans la rame (sombre)
+  metal: 0.55, // 1 : tout vient des reflets (couleurs sombres) ; plus bas, la couleur propre du ballon ressort
+  lueur: 0.3, // éclat propre de la couleur, indépendant de la lumière : des pastels lumineux même dans la rame
+  refletsRame: 1, // reflets de la station sur les ballons restés dans la rame (sombre)
   refletsQuai: 1,
   debit: 2.6, // m/s : vitesse à laquelle les ballons sortent par les portes
   main: 1, // force de la souris ou du doigt
@@ -68,26 +72,41 @@ function hasard(graine) {
 // ---------- Matières ----------
 // Aluminium : métal lisse dont la couleur teinte les reflets. Dans la rame, les ballons reflètent moins
 // la station (comme les autres matières de l'intérieur) ; sur le quai, pleinement.
+// Seuls les deux lustres de la station les éclairent (rangés en premier par Three.js, voir rame.js), pas les spots
+// des bandeaux : allumés à l'ouverture des portes, ils figeaient des taches de lumière sur les ballons
+const lustresSeuls = THREE.ShaderChunk.lights_fragment_begin.replace('for ( int i = 0; i < NUM_SPOT_LIGHTS; i ++ )', 'for ( int i = 0; i < 2; i ++ )')
+const uLueur = { value: params.lueur }
 const uRame = { value: params.refletsRame }, uQuai = { value: params.refletsQuai }
-function reflets(m, cle) {
+function reflets(m, cle, lueur, gris = { value: 0 }, clarte = { value: 1 }) {
   m.onBeforeCompile = (s) => {
     s.uniforms.uRefletsRame = uRame
     s.uniforms.uRefletsQuai = uQuai
+    s.uniforms.uLueur = lueur
+    s.uniforms.uGris = gris
+    s.uniforms.uClarte = clarte
     s.vertexShader = 'varying float vDedans;\n' + s.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       #ifdef USE_INSTANCING
         vDedans = 1.0 - smoothstep(${(Z_INT - 0.05).toFixed(3)}, ${(Z_EXT + 0.05).toFixed(3)}, instanceMatrix[3].z);
       #else
         vDedans = 0.0;
       #endif`)
-    s.fragmentShader = 'uniform float uRefletsRame, uRefletsQuai;\nvarying float vDedans;\n' + s.fragmentShader.replace('#include <aomap_fragment>', `#include <aomap_fragment>
+    s.fragmentShader = 'uniform float uRefletsRame, uRefletsQuai, uLueur, uGris, uClarte;\nvarying float vDedans;\n' + s.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      totalEmissiveRadiance += diffuseColor.rgb * uLueur;`).replace('#include <aomap_fragment>', `#include <aomap_fragment>
       float kReflets = mix(uRefletsQuai, uRefletsRame, vDedans);
       reflectedLight.indirectDiffuse *= kReflets;
-      reflectedLight.indirectSpecular *= kReflets;`)
+      reflectedLight.indirectSpecular *= kReflets;
+      // Argent : la station rose se reflète en gris (sa luminosité seule), sinon l'alu prend sa couleur
+      vec3 luma = vec3(0.2126, 0.7152, 0.0722);
+      reflectedLight.indirectSpecular = mix(reflectedLight.indirectSpecular, vec3(dot(reflectedLight.indirectSpecular, luma)), uGris) * uClarte;
+      reflectedLight.directSpecular = mix(reflectedLight.directSpecular, vec3(dot(reflectedLight.directSpecular, luma)), uGris) * uClarte;`).replace('#include <lights_fragment_begin>', lustresSeuls)
   }
   m.customProgramCacheKey = () => cle
 }
-const matCorps = new THREE.MeshStandardMaterial({ metalness: 1, roughness: params.rugosite })
-reflets(matCorps, 'ballon_corps')
+const matCorps = new THREE.MeshStandardMaterial({ metalness: params.metal, roughness: params.rugosite })
+const matArgent = new THREE.MeshStandardMaterial({ metalness: 1, roughness: params.argentRugosite })
+reflets(matCorps, 'ballon_corps', uLueur)
+const uArgentClarte = { value: params.argentClarte }
+reflets(matArgent, 'ballon_argent', { value: 0.1 }, { value: 1 }, uArgentClarte) // un léger éclat gris : jamais noir dans les creux
 
 // ---------- État ----------
 let racine = null, geoCorps = null, camera = null
@@ -153,6 +172,7 @@ export function construire() {
   const h = hasard(params.graine)
   const couleurs = [params.rose, params.bleu, params.argent].map((c) => new THREE.Color(c))
   const teinte = []
+  const genre = new Uint8Array(n)
   for (let i = 0; i < n; i++) {
     ech[i] = params.taille * (0.85 + 0.3 * h())
     rad[i] = 0.42 * ech[i] // le corps est un disque épais : un peu moins que son rayon
@@ -164,18 +184,20 @@ export function construire() {
     lacet[i] = h() * Math.PI * 2
     tourne[i] = (h() - 0.5) * 1.5
     penteX[i] = (h() - 0.5) * 0.3; penteZ[i] = (h() - 0.5) * 0.3
-    const c = couleurs[Math.floor(h() * 3)].clone()
+    genre[i] = Math.floor(h() * 3) // 0 rose, 1 bleu, 2 argent
+    const c = couleurs[genre[i]].clone()
     c.offsetHSL(0, 0, (h() - 0.5) * 0.06) // pas deux ballons tout à fait pareils
     teinte.push(c)
   }
   // Tranches de 2 m le long du train
   const LARGEUR = 2
   const nb = Math.ceil((X_MAX - X_MIN) / LARGEUR)
-  const ids = Array.from({ length: nb }, () => [])
-  for (let i = 0; i < n; i++) ids[Math.min(nb - 1, Math.floor((px[i] - X_MIN) / LARGEUR))].push(i)
-  for (const liste of ids) {
+  // Une tranche pour les pastels, une pour l'argent (sa propre matière)
+  const ids = Array.from({ length: nb * 2 }, () => [])
+  for (let i = 0; i < n; i++) ids[Math.min(nb - 1, Math.floor((px[i] - X_MIN) / LARGEUR)) * 2 + (genre[i] === 2 ? 1 : 0)].push(i)
+  for (const [b, liste] of ids.entries()) {
     if (!liste.length) continue
-    const corps = new THREE.InstancedMesh(geoCorps, matCorps, liste.length)
+    const corps = new THREE.InstancedMesh(geoCorps, b % 2 ? matArgent : matCorps, liste.length)
     corps.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     corps.castShadow = false // 8 cartes d'ombre à redessiner sinon
     corps.receiveShadow = false
@@ -459,6 +481,10 @@ export function prendreChangement() { const c = changement; changement = false; 
 
 function majMatieres() {
   matCorps.roughness = params.rugosite
+  matCorps.metalness = params.metal
+  matArgent.roughness = params.argentRugosite
+  uArgentClarte.value = params.argentClarte
+  uLueur.value = params.lueur
   uRame.value = params.refletsRame
   uQuai.value = params.refletsQuai
   changement = true
@@ -472,7 +498,11 @@ export function addGui(gui) {
   f.addColor(params, 'rose').name('Rose').onFinishChange(construire)
   f.addColor(params, 'bleu').name('Bleu').onFinishChange(construire)
   f.addColor(params, 'argent').name('Argent').onFinishChange(construire)
+  f.add(params, 'argentRugosite', 0, 1, 0.01).name('Argent : rugosité').onChange(majMatieres)
+  f.add(params, 'argentClarte', 0.5, 3, 0.01).name('Argent : clarté').onChange(majMatieres)
   f.add(params, 'rugosite', 0, 1, 0.01).name('Rugosité').onChange(majMatieres)
+  f.add(params, 'metal', 0, 1, 0.01).name('Métal').onChange(majMatieres)
+  f.add(params, 'lueur', 0, 1, 0.01).name('Éclat de la couleur').onChange(majMatieres)
   f.add(params, 'refletsRame', 0, 2, 0.01).name('Reflets dans la rame').onChange(majMatieres)
   f.add(params, 'refletsQuai', 0, 2, 0.01).name('Reflets sur le quai').onChange(majMatieres)
   f.add(params, 'debit', 0, 4, 0.05).name('Vitesse de sortie (m/s)').onChange(() => (eveil = 90))
