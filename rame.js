@@ -1023,6 +1023,16 @@ function poserBandeaux(scene) {
     bandeaux.push(l)
   }
 }
+// Préparation au chargement (prechauffer dans scene2.js) : un dessin invisible est fait aussi avec les spots des
+// bandeaux allumés. Sinon, à la première ouverture des portes, toutes les matières du train recompilaient leurs
+// shaders (écran figé une ou deux secondes sur iPhone : le geste semblait ne rien faire, puis les portes sautaient).
+export function avecBandeaux(dessiner) {
+  if (!params.bandeaux?.actifs || !bandeaux.length) return
+  const avant = bandeaux.map((l) => l.visible)
+  for (const l of bandeaux) l.visible = true
+  dessiner()
+  bandeaux.forEach((l, i) => (l.visible = avant[i]))
+}
 function majBandeaux() {
   const p = params.bandeaux
   if (!p) return

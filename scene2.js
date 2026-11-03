@@ -674,6 +674,9 @@ function prechauffer() {
   const avant = renderer.getRenderTarget()
   renderer.setRenderTarget(cibleChauffe)
   renderer.render(scene, camera)
+  // Et l'état portes ouvertes (spots des bandeaux allumés), cartes d'ombre comprises : créées dès maintenant
+  rame.avecBandeaux(() => { renderer.shadowMap.needsUpdate = true; renderer.render(scene, camera) })
+  renderer.shadowMap.needsUpdate = true // ombres de l'état réel, recalculées au prochain dessin
   renderer.setRenderTarget(avant)
   for (const o of coupes) o.frustumCulled = true
 }
