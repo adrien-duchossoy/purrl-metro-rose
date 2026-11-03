@@ -15,17 +15,17 @@ import { params as rp, PORTES, ouvertureVantail } from './rame.js'
 
 export const params = {
   actifs: true,
-  nombre: 2400,
-  taille: 0.34, // diamètre du corps, en m du repère du métro (× 1,435 à l'écran : 49 cm)
+  nombre: 700,
+  taille: 0.5, // diamètre du corps, en m du repère du métro (× 1,435 à l'écran : 72 cm)
   rose: '#ffb8dc',
   bleu: '#b8dcff',
   argent: '#f3f4f8',
   rugosite: 0.22,
   refletsRame: 0.6, // reflets de la station sur les ballons restés dans la rame (sombre)
   refletsQuai: 1,
-  debit: 1.2, // m/s : vitesse à laquelle les ballons sortent par les portes
+  debit: 2.6, // m/s : vitesse à laquelle les ballons sortent par les portes
   main: 1, // force de la souris ou du doigt
-  montee: 0.15, // part de la flottaison gardée sur le quai (0 : ils restent à hauteur, 1 : ils montent à la voûte)
+  montee: 1.2, // m/s² : montée des ballons sur le quai, vers la voûte (tous, même les dégonflés)
   freinage: 1.6, // résistance de l'air
   graine: 7,
 }
@@ -92,18 +92,25 @@ reflets(matCorps, 'ballon_corps')
 // ---------- État ----------
 let racine = null, geoCorps = null, camera = null
 let n = 0
-let px, py, pz, vx, vy, vz, rad, flotte, lacet, tourne, penteX, penteZ, voisins, ech
+let px, py, pz, vx, vy, vz, rad, flotte, lacet, tourne, penteX, penteZ, voisins, ech, sorti
+// Caméra dans le repère du métro : les ballons ne la traversent pas
+const cam = new THREE.Vector3(1e6, 0, 0), camAvant = new THREE.Vector3(Infinity, 0, 0)
+const RAYON_CAM = 0.35
 let tranches = [] // { corps, ids } : un InstancedMesh par tranche de 2 m, pour écarter ceux hors du champ
 let eveil = 0 // images restantes avant de s'endormir
 let changement = false
 let ouvAvant = -1
 let tAvant = null
 
-// Grille de voisinage (cases de la taille d'un ballon)
-const CASE = 0.36
+// Grille de voisinage : une case vaut au moins la distance d'interaction entre deux des plus gros ballons
+let CASE = 0.36, NX = 1, NY = 1, NZ = 1
+let tete = new Int32Array(1)
 const GX0 = -QUAI_X, GY0 = SOL - 0.1, GZ0 = -1.3
-const NX = Math.ceil((2 * QUAI_X) / CASE), NY = Math.ceil((QUAI_HAUT + 0.3) / CASE), NZ = Math.ceil((QUAI_FOND + 1.4) / CASE)
-const tete = new Int32Array(NX * NY * NZ)
+function grille() {
+  CASE = Math.max(0.2, 2 * 0.42 * params.taille * 1.15 * 1.1)
+  NX = Math.ceil((2 * QUAI_X) / CASE); NY = Math.ceil((QUAI_HAUT + 0.3) / CASE); NZ = Math.ceil((QUAI_FOND + 1.4) / CASE)
+  tete = new Int32Array(NX * NY * NZ)
+}
 let suivant = new Int32Array(0)
 const caseDe = (x, y, z) => {
   const i = Math.min(NX - 1, Math.max(0, ((x - GX0) / CASE) | 0))
@@ -140,7 +147,9 @@ export function construire() {
   rad = new Float32Array(n); flotte = new Float32Array(n); ech = new Float32Array(n)
   lacet = new Float32Array(n); tourne = new Float32Array(n); penteX = new Float32Array(n); penteZ = new Float32Array(n)
   voisins = new Uint8Array(n)
+  sorti = new Uint8Array(n) // passé sur le quai : il ne rentre plus
   suivant = new Int32Array(n)
+  grille()
   const h = hasard(params.graine)
   const couleurs = [params.rose, params.bleu, params.argent].map((c) => new THREE.Color(c))
   const teinte = []
@@ -235,29 +244,31 @@ function pas(dt, ouvert) {
     const r = rad[i]
     const dehors = pz[i] > Z_MUR
     // Flottaison (réduite sur le quai), et poussée des ballons serrés
-    let ax = 0, ay = flotte[i] * (dehors && flotte[i] > 0 ? p.montee : 1), az = 0
+    // Sur le quai, tous montent vers la voûte, un peu plus ou un peu moins vite selon leur gonflage
+    let ax = 0, ay = dehors ? p.montee * (0.7 + 0.5 * Math.abs(flotte[i])) : flotte[i], az = 0
     // Écoulement par les portes ouvertes : chaque ballon tend vers une vitesse de sortie (sans à-coup : il y
-    // arrive en une seconde environ). Le flot continue tant que la rame est pleine ; un ballon isolé reste.
+    // arrive en moins d'une seconde). Tous sortent : la rame est vide en quelques secondes.
     if (demiOuv > r) {
       const ouv = THREE.MathUtils.smoothstep(demiOuv, r, DEMI_PORTE) // le flot grandit avec la baie
       const xp = porteProche(px[i])
-      const entoure = Math.min(1, voisins[i] / 3)
       let dx, dy, dz, vise
       if (!dehors) {
-        // Vers la porte la plus proche, à hauteur de passage
-        dx = xp - px[i]; dz = Z_EXT + 0.3 - pz[i]; dy = Math.min(0, HAUT_PORTE * 0.6 - py[i])
+        // Vers la porte la plus proche, à hauteur de passage. La flottaison est presque annulée pendant la
+        // sortie, sinon les ballons du plafond restent coincés au-dessus de la baie
+        ay -= flotte[i] * 0.85 * ouv
+        dx = xp - px[i]; dz = Z_EXT + 0.4 - pz[i]; dy = Math.min(0, 1.0 - py[i])
         const l = Math.hypot(dx, dy, dz) || 1
-        vise = p.debit * ouv * entoure * (0.4 + 0.6 / (1 + l / 3))
+        vise = p.debit * ouv
         dx /= l; dy /= l; dz /= l
       } else {
-        // Sur le quai, ils s'écartent de la porte tant qu'ils sont serrés
+        // Sur le quai, ils dégagent la porte (jusqu'à 3 m) pour laisser passer les suivants
         dx = px[i] - xp; dz = pz[i] - Z_EXT; dy = 0
         const l = Math.hypot(dx, dz) || 1
-        vise = p.debit * 0.5 * ouv * Math.min(1, Math.max(0, voisins[i] - 2) / 3)
+        vise = p.debit * ouv * Math.max(0, 1 - l / 3)
         dx /= l; dz /= l
       }
       const manque = vise - (vx[i] * dx + vy[i] * dy + vz[i] * dz)
-      if (manque > 0) { const a = manque * 1.5; ax += a * dx; ay += a * dy; az += a * dz }
+      if (manque > 0) { const a = manque * 2; ax += a * dx; ay += a * dy; az += a * dz }
     }
     vx[i] = (vx[i] + ax * dt) * frein
     vy[i] = (vy[i] + ay * dt) * frein
@@ -294,6 +305,18 @@ function pas(dt, ouvert) {
       x = THREE.MathUtils.clamp(x, -QUAI_X + r, QUAI_X - r)
       if (z < Z_EXT + r && dansPorte) x = THREE.MathUtils.clamp(x, xp - demiOuv + r, xp + demiOuv - r)
     }
+    // Une fois sur le quai, il ne rentre plus dans la rame
+    if (z > Z_EXT + r) sorti[i] = 1
+    else if (sorti[i]) { z = Z_EXT + r; if (vz[i] < 0) vz[i] = 0 }
+    // La caméra : une bulle que les ballons contournent (on ne se retrouve jamais dans un ballon)
+    const cx = x - cam.x, cy = y - cam.y, cz = z - cam.z, rc = RAYON_CAM + r
+    const d2 = cx * cx + cy * cy + cz * cz
+    if (d2 < rc * rc) {
+      const d = Math.sqrt(d2) || 1e-3, nx = cx / d, ny = cy / d, nz = cz / d
+      x = cam.x + nx * rc; y = cam.y + ny * rc; z = cam.z + nz * rc
+      const vn = vx[i] * nx + vy[i] * ny + vz[i] * nz
+      if (vn < 0) { vx[i] -= vn * nx; vy[i] -= vn * ny; vz[i] -= vn * nz }
+    }
     px[i] = x; py[i] = y; pz[i] = z
   }
 }
@@ -324,6 +347,18 @@ export function update(now = performance.now()) {
   const ouvert = ouvertureVantail()
   if (ouvert !== ouvAvant) { ouvAvant = ouvert; eveil = Math.max(eveil, 90) }
   if (toucher(dt)) eveil = Math.max(eveil, 90)
+  // La caméra a bougé et frôle des ballons : on recalcule
+  if (camera) {
+    racine.updateMatrixWorld()
+    cam.setFromMatrixPosition(camera.matrixWorld).applyMatrix4(versLocal.copy(racine.matrixWorld).invert())
+    if (cam.distanceToSquared(camAvant) > 1e-8) {
+      camAvant.copy(cam)
+      for (let i = 0; i < n; i++) {
+        const rc = RAYON_CAM + rad[i] + 0.05
+        if ((px[i] - cam.x) ** 2 + (py[i] - cam.y) ** 2 + (pz[i] - cam.z) ** 2 < rc * rc) { eveil = Math.max(eveil, 90); break }
+      }
+    }
+  }
   if (eveil <= 0) return
   // Deux demi-pas quand ça va vite : les ballons ne passent pas les uns à travers les autres
   const sous = vmaxAvant > 1.5 ? 2 : 1
@@ -432,8 +467,8 @@ function majMatieres() {
 export function addGui(gui) {
   const f = gui.addFolder('Ballons')
   f.add(params, 'actifs').name('Ballons').onChange(construire)
-  f.add(params, 'nombre', 100, 4000, 50).name('Nombre').onFinishChange(construire)
-  f.add(params, 'taille', 0.15, 0.6, 0.01).name('Taille (m)').onFinishChange(construire)
+  f.add(params, 'nombre', 50, 3000, 10).name('Nombre').onFinishChange(construire)
+  f.add(params, 'taille', 0.15, 0.8, 0.01).name('Taille (m)').onFinishChange(construire)
   f.addColor(params, 'rose').name('Rose').onFinishChange(construire)
   f.addColor(params, 'bleu').name('Bleu').onFinishChange(construire)
   f.addColor(params, 'argent').name('Argent').onFinishChange(construire)
@@ -442,7 +477,7 @@ export function addGui(gui) {
   f.add(params, 'refletsQuai', 0, 2, 0.01).name('Reflets sur le quai').onChange(majMatieres)
   f.add(params, 'debit', 0, 4, 0.05).name('Vitesse de sortie (m/s)').onChange(() => (eveil = 90))
   f.add(params, 'main', 0, 3, 0.01).name('Force de la souris / du doigt')
-  f.add(params, 'montee', 0, 1, 0.01).name('Montée sur le quai').onChange(() => (eveil = 90))
+  f.add(params, 'montee', 0, 4, 0.05).name('Montée sur le quai').onChange(() => (eveil = 90))
   f.add(params, 'freinage', 0.5, 8, 0.1).name("Résistance de l'air").onChange(() => (eveil = 90))
   f.add(params, 'graine', 1, 99, 1).name('Tirage').onFinishChange(construire)
   f.add({ reinit: construire }, 'reinit').name('↺ Remettre dans la rame')
