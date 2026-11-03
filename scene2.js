@@ -6,6 +6,7 @@ import { FOG_GLSL } from './fog.js'
 import * as rame from './rame.js'
 import { ecarter, avancer } from './gestes.js'
 import * as brume3d from './brume3d.js'
+import * as ballons from './ballons.js'
 
 // Scène 2 : la station en 3D, avec les images cuites par survey/scene2/bake_tex.py.
 // La caméra reste à la place de la caméra fSpy et tourne sur elle-même vers la voie.
@@ -180,6 +181,7 @@ export const ready = new Promise((resolve) => {
     rame.setCameraZ(camera.position.z) // pour caler une porte au centre de l'écran
   })
   rame.load(scene, renderer, manager)
+  ballons.load(rame.group, manager, camera) // ballons foil dans la rame (ballons.js)
 })
 
 // ---------- La brume, ajoutée par-dessus l'image de la station ----------
@@ -445,6 +447,7 @@ v2.add(view, 'libre').name('Vue libre (souris)').onChange(setFree)
 v2.add(view, 'brume').name('Brume visible')
 v2.add({ sequence: () => sequence().then(portesAuGeste) }, 'sequence').name('▶ Rejouer la séquence')
 rame.addGui(gui)
+ballons.addGui(gui)
 brume3d.addGui(gui)
 gui.add({
   copier() {
@@ -561,7 +564,8 @@ function render(now = performance.now()) {
   // Image 3D calculée une fois puis réutilisée tant que rien ne change (scène finale immobile : 60 i/s au lieu de 30).
   // Recalculée si la caméra bouge, si le métro, ses portes, ses lumières ou un réglage changent, si la brume est
   // visible (elle s'anime), pendant le chargement et après un changement de taille. Grain et halo : à chaque image.
-  const rameChange = rame.prendreChangement()
+  ballons.update(now)
+  const rameChange = rame.prendreChangement() | ballons.prendreChangement()
   const camBouge = !camAvant.equals(camera.matrixWorld) || !projAvant.equals(camera.projectionMatrix)
   if (imageSale || rameChange || camBouge || dehors > 0 || !chargee) {
     renderer.setRenderTarget(target)
@@ -616,6 +620,7 @@ export async function sequence(ms = 7000) {
   stopAvance() // on revient sur le quai
   Object.assign(entree, { avance: 0, virage: 0, avanceCible: 0, virageCible: 0 })
   rame.setOuverture(0)
+  ballons.reinit() // tous les ballons de retour dans la rame
   rame.setArrivee(0) // le train attend dans le tunnel que le rideau de brume se forme
   allumage = 'attente'
   await wait(brume3d.params.montee * 1000)

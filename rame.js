@@ -183,7 +183,7 @@ let cameraZ = null // position de la caméra le long du quai : le centre de l'é
 // Milieu de chaque porte côté quai, le long du tram (en m, dans tram_rose.blend), de la cabine avant
 // (la petite porte, n° 1) à la cabine arrière
 // MP 89 : les six portes côté quai, de la cabine vers l'arrière (axe de chaque porte dans mp89.glb)
-const PORTES = MP89
+export const PORTES = MP89
   ? [10.799, 6.634, 2.452, -3.447, -7.606, -11.788]
   : [20.3009, 13.5022, 9.9669, 1.7676, -1.7676, -9.9669, -13.5022, -20.3009]
 
@@ -575,6 +575,8 @@ const COULISSE = MP89 ? 0.84 : 0.73 // m (MP 89 : un vantail fait 88 cm)
 const IMAGES = 80
 const DUREE_PORTES = IMAGES / 24 // secondes, ouverture complète à la vitesse du fichier
 let portes = [] // { o, base, sens (±1 le long du tram), sortie (m) }
+// Course de chaque vantail, en m (0 : fermé ; 0,84 : grand ouvert). Pour les ballons (ballons.js)
+export const ouvertureVantail = () => COULISSE * courbe(GLISSE, 30, 80, params.portes.ouverture * IMAGES)
 
 // Valeur d'une courbe relevée entre l'image f0 et l'image f1, à l'image f
 function courbe(table, f0, f1, f) {
