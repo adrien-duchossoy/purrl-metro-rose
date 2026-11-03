@@ -244,12 +244,15 @@ const refletVitre = new THREE.MeshStandardMaterial({
   color: 0x000000, roughness: 0.03, metalness: 0, envMapIntensity: params.lumieres.vitres,
   transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
 })
+// Les spots des lustres sont ajoutés à la scène avant ceux des bandeaux : Three.js les range en premier (ombres
+// portées d'abord, puis l'ordre de la scène). Ces matières ne lisent que ces deux-là.
+const lustresSeuls = THREE.ShaderChunk.lights_fragment_begin.replace('for ( int i = 0; i < NUM_SPOT_LIGHTS; i ++ )', 'for ( int i = 0; i < 2; i ++ )')
 // Les vitres ignorent les spots cachés dans les bandeaux : sinon chaque source apparaît en point blanc dans le reflet
-// (les lustres, des lumières ponctuelles, gardent leur reflet)
+// (les lustres gardent leur reflet)
 function sansSpots(m) {
   m.onBeforeCompile = (s) => {
     s.fragmentShader = s.fragmentShader.replace('#include <lights_fragment_begin>',
-      THREE.ShaderChunk.lights_fragment_begin.replace('#if ( NUM_SPOT_LIGHTS > 0 )', '#if 0'))
+      lustresSeuls)
   }
   m.customProgramCacheKey = () => 'sansSpots'
 }
@@ -262,7 +265,7 @@ function sansSpotsDehors(m) {
   m.onBeforeCompile = (s, r) => {
     avant.call(m, s, r)
     s.fragmentShader = s.fragmentShader.replace('#include <lights_fragment_begin>',
-      THREE.ShaderChunk.lights_fragment_begin.replace('#if ( NUM_SPOT_LIGHTS > 0 )', '#if 0'))
+      lustresSeuls)
   }
   m.customProgramCacheKey = () => cleAvant.call(m) + '_sansSpots'
 }
@@ -621,7 +624,7 @@ export function finirOuverture() {
 }
 
 export function load(scene, renderer, manager) {
-  scene.add(group, ...lampes)
+  scene.add(...lampes, ...lampes.map((l) => l.target), group) // lustres d'abord : voir lustresSeuls
 
   // Reflets et lumière d'ambiance : la station vue à 360° depuis la place du train (survey/scene2/quai.blend,
   // collection « EnvMap (test) ») : la moitié côté tunnel, recopiée en miroir derrière, le trou au-dessus
@@ -636,6 +639,21 @@ export function load(scene, renderer, manager) {
   const loader = new HDRLoader(manager)
   loader.load('scene2/envmap.hdr', (t) => { envMat.uniforms.tFull.value = t; majEnv() })
   loader.load('scene2/envmap_base.hdr', (t) => { envMat.uniforms.tBase.value = t; majEnv() })
+  if (MP89) {
+    const tl = new THREE.TextureLoader(manager)
+    tl.load(`scene2/logo_purrl.png?v=${Date.now()}`, (t) => {
+      t.colorSpace = THREE.SRGBColorSpace
+      t.anisotropy = renderer.capabilities.getMaxAnisotropy()
+      logoU.tLogo.value = t
+      aspectLogo = t.image.width / t.image.height
+      majLogo()
+    })
+    tl.load(`scene2/paint_sans_logo.png?v=${Date.now()}`, (t) => {
+      t.colorSpace = THREE.SRGBColorSpace
+      peintureSansLogo = t
+      for (const m of matsPeinture) poserPeinture(m)
+    })
+  }
 
   if (MP89) {
     const loader = new GLTFLoader(manager)
@@ -811,10 +829,15 @@ if (MP89) params.lustresReels = {
   envDiffus: 0.56, // part restante de la lumière diffuse de l'env map (1 : comme avant)
   ombres: true,
 }
+// Spots tournés vers le train, pas des lampes dans toutes les directions : la station ignore la lumière, seul le
+// train la reçoit. Une lampe ponctuelle calculait ses ombres dans 6 directions (le train redessiné 12 fois par
+// image pendant l'arrivée) ; un spot, dans une seule. Même intensité en candelas : même lumière dans le cône.
+const LUSTRES_CIBLE = { x: 2.355, y: 1.5 } // axe du train à quai, à mi-hauteur de caisse
 const lampes = MP89 ? LUSTRES.map((p) => {
-  const l = new THREE.PointLight(0xffffff, 0, 0, 2) // portée infinie, baisse physique (carré de la distance)
+  const l = new THREE.SpotLight(0xffffff, 0, 0, THREE.MathUtils.degToRad(80), 0.1, 2) // portée infinie, baisse physique
   l.position.copy(p)
-  l.shadow.mapSize.set(1024, 1024)
+  l.target.position.set(LUSTRES_CIBLE.x, LUSTRES_CIBLE.y, p.z)
+  l.shadow.mapSize.set(2048, 2048)
   Object.assign(l.shadow.camera, { near: 0.1, far: 30 })
   l.shadow.bias = -0.0005
   l.shadow.normalBias = 0.02
@@ -1072,6 +1095,89 @@ function ombreContact(m, partie) {
   aoMats.push(m)
 }
 
+// ---------- Logo Purrl sur les portes ----------
+// Imprimé sur le bas blanc (matière pintura) du vantail de gauche de chaque porte, vu de l'extérieur, centré sur
+// lui : il suit le vantail à l'ouverture. Centré sur la jonction des deux vantaux, le joint coupait le R du milieu
+// (essai du 03/11). La caisse n'a plus de logo (paint_sans_logo.png, survey/scene2/metro/mp89/peindre.py).
+// Chaque point du vantail garde sa position par rapport au centre du logo (attribut aLogo).
+if (MP89) params.logo = { taille: 0.8 } // largeur du logo, en part de la largeur du vantail
+const vide = new THREE.DataTexture(new Uint8Array(4), 1, 1)
+vide.needsUpdate = true
+const logoU = { tLogo: { value: vide }, uLogoH: { value: 1 }, uLogoL: { value: 1 } }
+let largeurVantail = 0.6 // largeur de la peinture d'un vantail, mesurée au chargement
+let aspectLogo = 991 / 256
+const matsPeinture = []
+let peintureSansLogo = null
+function majLogo() {
+  if (!params.logo) return
+  logoU.uLogoL.value = params.logo.taille * largeurVantail
+  logoU.uLogoH.value = logoU.uLogoL.value / aspectLogo
+  changement = true
+}
+function poserPeinture(m) {
+  const t = peintureSansLogo, avant = m.map
+  if (!t || !avant || avant === t) return
+  t.flipY = avant.flipY; t.wrapS = avant.wrapS; t.wrapT = avant.wrapT; t.channel = avant.channel
+  t.anisotropy = avant.anisotropy
+  m.map = t
+  changement = true
+}
+function logoPortes(m) {
+  matsPeinture.push(m)
+  poserPeinture(m)
+  const avant = m.onBeforeCompile, cleAvant = m.customProgramCacheKey
+  m.onBeforeCompile = (s, r) => {
+    avant.call(m, s, r)
+    Object.assign(s.uniforms, logoU)
+    s.vertexShader = 'attribute vec3 aLogo;\nvarying vec3 vLogo;\n' + s.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvLogo = aLogo;')
+    s.fragmentShader = 'uniform sampler2D tLogo;\nuniform float uLogoH, uLogoL;\nvarying vec3 vLogo;\n' + s.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      if (vLogo.z > 0.5) { // face extérieure d'un vantail (ailleurs, l'attribut vaut 0)
+        vec2 lu = vec2(0.5 + vLogo.x / uLogoL, 0.5 + vLogo.y / uLogoH);
+        if (all(greaterThan(lu, vec2(0.0))) && all(lessThan(lu, vec2(1.0)))) {
+          vec4 lg = texture2D(tLogo, lu);
+          diffuseColor.rgb = mix(diffuseColor.rgb, lg.rgb, lg.a);
+        }
+      }`)
+  }
+  m.customProgramCacheKey = () => cleAvant.call(m) + '_logo'
+}
+// Paire de vantaux fermés (g et d : plus petit et plus grand x dans le repère du parent) : chaque point de la
+// peinture extérieure du vantail de gauche reçoit sa position par rapport au centre du logo
+function marquerLogo(g, d, versParent) {
+  const cote = Math.sign((g.b.min.z + g.b.max.z) / 2) // côté quai (+z) ou côté voie : lu à l'endroit des deux côtés
+  const gauche = cote > 0 ? g.o : d.o // vu du quai, la gauche est vers les x négatifs ; vu de la voie, l'inverse
+  const p = new THREE.Vector3(), n = new THREE.Vector3(), M = new THREE.Matrix4(), N = new THREE.Matrix3()
+  const pieces = []
+  gauche.traverse((o) => { if (o.isMesh && o.material.name === 'pintura') pieces.push(o) })
+  // Bande blanche du bas (rangées 959 à 1151 sur 1152 de la texture de peinture), et largeur du vantail
+  let y0 = Infinity, y1 = -Infinity, x0 = Infinity, x1 = -Infinity
+  for (const o of pieces) {
+    M.multiplyMatrices(versParent, o.matrixWorld)
+    const pos = o.geometry.attributes.position, uv = o.geometry.attributes.uv
+    for (let i = 0; i < pos.count; i++) if (uv.getY(i) >= 959 / 1152) {
+      p.fromBufferAttribute(pos, i).applyMatrix4(M)
+      y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x)
+    }
+  }
+  if (!(y1 > y0)) return
+  largeurVantail = x1 - x0
+  const xc = (x0 + x1) / 2, yc = (y0 + y1) / 2
+  for (const o of pieces) {
+    o.geometry = o.geometry.clone() // propre à ce vantail : la position du logo en dépend
+    M.multiplyMatrices(versParent, o.matrixWorld)
+    N.getNormalMatrix(M)
+    const pos = o.geometry.attributes.position, nor = o.geometry.attributes.normal
+    const a = new Float32Array(pos.count * 3)
+    for (let i = 0; i < pos.count; i++) {
+      p.fromBufferAttribute(pos, i).applyMatrix4(M)
+      n.fromBufferAttribute(nor, i).applyMatrix3(N).normalize()
+      if (n.z * cote < 0.5) continue // face intérieure ou tranche : pas de logo
+      a.set([cote * (p.x - xc), p.y - yc, 1], i * 3)
+    }
+    o.geometry.setAttribute('aLogo', new THREE.BufferAttribute(a, 3))
+  }
+}
+
 function preparerMP89(gltf, renderer) {
   const remplace = new Map()
   // cuit : la pièce a la lumière cuite (second jeu d'UV) ; elle reçoit sa propre copie de la matière
@@ -1096,6 +1202,7 @@ function preparerMP89(gltf, renderer) {
       })
       if (r.map) r.map.anisotropy = renderer.capabilities.getMaxAnisotropy()
       bordCaisse(r) // pour la clarté de la carrosserie ; aucune ouverture n'est déclarée (bordOuv reste vide)
+      if (m.name === 'pintura') logoPortes(r)
     } else if (m.name === 'verre') {
       // Verre : une seule couche transparente, qui écrit sa distance et marque l'image comme « métro »
       r = new THREE.MeshStandardMaterial({
@@ -1149,6 +1256,31 @@ function preparerMP89(gltf, renderer) {
   })
   // Spots retirés des matières de la carrosserie seulement (pas de celles que partagent l'intérieur ou les portes)
   for (const m of dehors) if (!dedans.has(m) && m.name !== 'verre') sansSpotsDehors(m)
+  gltf.scene.updateMatrixWorld(true)
+
+  // Portes fermées bord à bord : dans le modèle, les deux vantaux d'une porte laissent un entrebâillement. Chaque
+  // vantail est rapproché de la moitié de l'écart (mesuré entre leurs boîtes, dans le repère de leur parent : 1,55 cm
+  // du modèle, 2,2 cm à l'échelle, pour les 11 portes, mesuré le 03/11),
+  // des deux côtés du train ; la voiture dupliquée à l'arrière, copiée ensuite, en hérite.
+  const vantaux = new Map()
+  gltf.scene.traverse((o) => {
+    const m = /^mp_door_(\d+)_[ab]$/.exec(o.name)
+    if (!m || !o.parent || o.parent.name.startsWith('mp_door_')) return
+    const cle = o.parent.uuid + '_' + m[1]
+    vantaux.set(cle, [...(vantaux.get(cle) ?? []), o])
+  })
+  for (const paire of vantaux.values()) {
+    if (paire.length !== 2) continue
+    const versParent = paire[0].parent.matrixWorld.clone().invert()
+    const [g, d] = paire.map((o) => ({ o, b: new THREE.Box3().setFromObject(o).applyMatrix4(versParent) })).sort((a, b) => a.b.min.x - b.b.min.x)
+    const ecart = d.b.min.x - g.b.max.x
+    if (ecart < 0 || ecart > 0.1) continue // pas une paire de vantaux face à face
+    g.o.position.x += ecart / 2
+    d.o.position.x -= ecart / 2
+    g.o.updateMatrixWorld(true); d.o.updateMatrixWorld(true)
+    marquerLogo(g, d, versParent) // vantaux fermés bord à bord : jonction au milieu de l'ancien écart
+  }
+  majLogo()
   gltf.scene.updateMatrixWorld(true)
 
   // Portes côté quai (+z) : chaque vantail a son origine à l'axe de la porte ; le centre de sa géométrie
@@ -1331,6 +1463,7 @@ export function addGui(gui) {
     lr.add(params.lustresReels, 'intensite', 0, 200, 0.5).name('Intensité (par lustre)').onChange(majLustres)
     lr.addColor(params.lustresReels, 'couleur').name('Couleur').onChange(majLustres)
     lr.add(params.lustresReels, 'ombres').name('Ombres portées (coûteux)').onChange(majLustres)
+    gui.addFolder('Logo sur les portes').add(params.logo, 'taille', 0.2, 1, 0.01).name('Largeur (part du vantail)').onChange(majLogo)
   }
   const e = ecl.addFolder('Lumière de la station (env map)')
   e.add(params.lumieres, 'reflets', 0, 3, 0.05).name('Intensité générale').onChange(update)

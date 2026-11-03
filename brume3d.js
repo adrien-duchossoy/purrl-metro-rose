@@ -75,8 +75,13 @@ const sortieTunnel = () => [rnd(...TUNNEL.x), rnd(TUNNEL.y[0], TUNNEL.y[1]), rnd
 // ---------- Dessin ----------
 
 const geo = new THREE.InstancedBufferGeometry()
-geo.setAttribute('position', new THREE.Float32BufferAttribute([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0], 3))
-geo.setIndex([0, 1, 2, 0, 2, 3])
+// Octogone autour du rond de la nappe (rayon 0,5) : les coins d'un carré étaient dessinés pour rien (17 % de pixels)
+const OCT = Array.from({ length: 8 }, (_, k) => {
+  const a = Math.PI / 8 + (k * Math.PI) / 4, r = 0.5 / Math.cos(Math.PI / 8)
+  return [r * Math.cos(a), r * Math.sin(a), 0]
+}).flat()
+geo.setAttribute('position', new THREE.Float32BufferAttribute(OCT, 3))
+geo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7])
 const aPos = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3)
 const aData = new THREE.InstancedBufferAttribute(new Float32Array(N * 4), 4) // taille, angle, graine, opacité
 aPos.setUsage(THREE.DynamicDrawUsage)
@@ -91,6 +96,56 @@ geo.instanceCount = N
 const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType })
 export const texture = target.texture
 
+// ---------- Motif de la brume, calculé une seule fois ----------
+// Avant, chaque nappe recalculait le motif (6 bruits, 48 tirages) en chaque pixel : à la sortie du train, 140 nappes
+// se superposent et ce calcul était refait des dizaines de fois par pixel (chute à 25 i/s). Le même motif (3 octaves
+// de bruit) est maintenant calculé une fois, sur la carte graphique, dans une texture 3D de 128³ qui se répète
+// tous les 16 motifs (53 m à l'échelle par défaut) ; chaque nappe ne fait plus que la lire.
+const NB = 128, PERIODE = 16
+const motif = new THREE.WebGL3DRenderTarget(NB, NB, NB)
+motif.texture.wrapS = motif.texture.wrapT = motif.texture.wrapR = THREE.RepeatWrapping
+motif.texture.minFilter = motif.texture.magFilter = THREE.LinearFilter
+let motifPret = false
+const motifMat = new THREE.ShaderMaterial({
+  glslVersion: THREE.GLSL3,
+  depthTest: false,
+  depthWrite: false,
+  uniforms: { uCouche: { value: 0 } },
+  vertexShader: 'out vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: /* glsl */ `
+    precision highp float;
+    uniform float uCouche;
+    in vec2 vUv;
+    out vec4 fragColor;
+    // Bruit de valeur qui se répète tous les P carreaux (les carreaux sont pris modulo P)
+    float h(vec3 i, float P) { i = mod(i, P); return fract(sin(dot(i, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+    float bruit(vec3 p, float P) {
+      vec3 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(mix(h(i, P), h(i + vec3(1, 0, 0), P), f.x), mix(h(i + vec3(0, 1, 0), P), h(i + vec3(1, 1, 0), P), f.x), f.y),
+                 mix(mix(h(i + vec3(0, 0, 1), P), h(i + vec3(1, 0, 1), P), f.x), mix(h(i + vec3(0, 1, 1), P), h(i + vec3(1, 1, 1), P), f.x), f.y), f.z);
+    }
+    void main() {
+      vec3 p = vec3(vUv, uCouche) * ${PERIODE}.0;
+      float v = 0.0, a = 0.5, P = ${PERIODE}.0;
+      for (int o = 0; o < 3; o++) { v += a * bruit(p + 13.0 * float(o), P); p *= 2.0; P *= 2.0; a *= 0.5; }
+      fragColor = vec4(v / 0.875, 0.0, 0.0, 1.0);
+    }`,
+})
+function calculerMotif(renderer) {
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), motifMat), cam = new THREE.Camera()
+  const avant = renderer.getRenderTarget()
+  for (let z = 0; z < NB; z++) {
+    motifMat.uniforms.uCouche.value = (z + 0.5) / NB
+    renderer.setRenderTarget(motif, z)
+    renderer.render(quad, cam)
+  }
+  renderer.setRenderTarget(avant)
+  quad.geometry.dispose()
+  motifMat.dispose()
+  motifPret = true
+}
+
 const mat = new THREE.ShaderMaterial({
   glslVersion: THREE.GLSL3,
   transparent: true,
@@ -102,6 +157,7 @@ const mat = new THREE.ShaderMaterial({
   blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
   uniforms: {
     tDepth: { value: null },
+    tMotif: { value: motif.texture },
     uNear: { value: 0.05 },
     uFar: { value: 500 },
     uRes: { value: new THREE.Vector2(1, 1) },
@@ -123,6 +179,9 @@ const mat = new THREE.ShaderMaterial({
     out float vDepth, vSeed, vAlpha;
     void main() {
       vec4 c = viewMatrix * vec4(iPos, 1.0);
+      // À moins de 60 cm de la caméra, la nappe est entièrement effacée (smoothstep(0.6, 2.5, vDepth)) : elle couvrait
+      // tout l'écran pour rien. Elle est retirée avant d'être dessinée (hors de l'écran, aucun pixel).
+      if (-c.z < 0.6) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
       float s = sin(iData.y), co = cos(iData.y);
       vec2 corner = mat2(co, s, -s, co) * position.xy * iData.x; // nappe face à la caméra, tournée sur elle-même
       // Étirée dans le sens de son mouvement à l'écran : plus elle va vite, plus elle s'allonge en traînée
@@ -148,6 +207,7 @@ const mat = new THREE.ShaderMaterial({
     in float vDepth, vSeed, vAlpha;
     out vec4 fragColor;
     uniform sampler2D tDepth;
+    uniform highp sampler3D tMotif;
     uniform float uNear, uFar, uTime, uOpacity, uSparkle, uScale, uTrain;
     uniform vec3 uTrainMin, uTrainMax;
     uniform vec2 uRes;
@@ -158,18 +218,7 @@ const mat = new THREE.ShaderMaterial({
       f = f * f * (3.0 - 2.0 * f);
       return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
     }
-    float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
-    float noise3(vec3 p) {
-      vec3 i = floor(p), f = fract(p);
-      f = f * f * (3.0 - 2.0 * f);
-      return mix(mix(mix(hash3(i), hash3(i + vec3(1, 0, 0)), f.x), mix(hash3(i + vec3(0, 1, 0)), hash3(i + vec3(1, 1, 0)), f.x), f.y),
-                 mix(mix(hash3(i + vec3(0, 0, 1)), hash3(i + vec3(1, 0, 1)), f.x), mix(hash3(i + vec3(0, 1, 1)), hash3(i + vec3(1, 1, 1)), f.x), f.y), f.z);
-    }
-    float fbm3(vec3 p) {
-      float v = 0.0, a = 0.5;
-      for (int i = 0; i < 3; i++) { v += a * noise3(p); p = p * 2.07 + 13.0; a *= 0.5; }
-      return v / 0.875;
-    }
+    float fbm3(vec3 p) { return texture(tMotif, p / ${PERIODE}.0).r; } // motif calculé une fois (calculerMotif)
 
     void main() {
       // Forme : une tache très douce, sans contour visible. La densité vient d'un motif calculé dans
@@ -179,21 +228,25 @@ const mat = new THREE.ShaderMaterial({
       float shape = exp(-dot(q, q) * 9.0) - 0.105; // nulle au bord de la nappe
       if (shape <= 0.0) discard; // coin du carré, hors de la nappe : rien à calculer
       shape /= 0.895;
-      vec3 w = vWorld * uScale + vec3(0.0, 0.0, uTime * 0.12);
-      float n = fbm3(w);
-      float dens = smoothstep(0.28, 0.72, n + 0.12 * fbm3(w * 3.1 + 5.0));
-      float a = shape * (0.12 + 0.88 * dens);
 
-      // Contact doux avec le décor et le métro, et effacement tout près de la caméra
+      // Contact doux avec le décor et le métro, et effacement tout près de la caméra. Calculé en premier : un point
+      // caché (nappe encore dans le tunnel, derrière le mur ou le nez du train) est abandonné tout de suite, sans
+      // calculer le motif ni les paillettes. À la sortie du train, c'est le cas de la plupart des 140 nappes.
       float z = texture(tDepth, gl_FragCoord.xy / uRes).r;
       float sceneDepth = -(uNear * uFar) / ((uFar - uNear) * z - uFar);
-      a *= smoothstep(0.0, 1.2, sceneDepth - vDepth) * smoothstep(0.6, 2.5, vDepth);
+      float vu = smoothstep(0.0, 1.2, sceneDepth - vDepth) * smoothstep(0.6, 2.5, vDepth);
       // La brume ne rentre pas dans le train : un point de nappe situé dans le volume du métro (vu par une
       // porte ou une vitre) est effacé, en douceur sur les 30 derniers centimètres. Ailleurs, rien ne change.
       if (uTrain > 0.5) {
         vec3 dIn = min(vWorld - uTrainMin, uTrainMax - vWorld); // > 0 dans le volume du train
-        a *= 1.0 - smoothstep(0.0, 0.3, min(min(dIn.x, dIn.y), dIn.z));
+        vu *= 1.0 - smoothstep(0.0, 0.3, min(min(dIn.x, dIn.y), dIn.z));
       }
+      if (vu <= 0.0) discard;
+
+      vec3 w = vWorld * uScale + vec3(0.0, 0.0, uTime * 0.12);
+      float n = fbm3(w);
+      float dens = smoothstep(0.28, 0.72, n + 0.12 * fbm3(w * 3.1 + 5.0));
+      float a = shape * (0.12 + 0.88 * dens) * vu;
       a *= vAlpha * uOpacity;
 
       vec3 col = mix(vec3(0.99, 0.86, 0.92), vec3(0.95, 0.78, 0.86), dens); // mêmes roses que la brume de la photo
@@ -206,7 +259,13 @@ const mat = new THREE.ShaderMaterial({
       vec2 px = 1.0 / max(fwidth(vUv), vec2(1e-5)); // pixels par unité de nappe
       vec2 g = vUv * 7.0;
       vec3 spark = vec3(0.0);
-      for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+      // Une paillette ne dépasse jamais 9,5 px de son centre, posé entre 20 et 80 % de sa case : on n'examine une
+      // case voisine que si le pixel est assez près du bord pour qu'elle l'atteigne. Même image, mais une nappe
+      // proche (cases de dizaines de pixels) n'examine plus que sa propre case au lieu de 9.
+      vec2 casePx = px / 7.0, f = fract(g);
+      int x0 = (f.x + 0.2) * casePx.x <= 9.5 ? -1 : 0, x1 = (1.2 - f.x) * casePx.x <= 9.5 ? 1 : 0;
+      int y0 = (f.y + 0.2) * casePx.y <= 9.5 ? -1 : 0, y1 = (1.2 - f.y) * casePx.y <= 9.5 ? 1 : 0;
+      for (int dy = y0; dy <= y1; dy++) for (int dx = x0; dx <= x1; dx++) {
         vec2 cell = floor(g) + vec2(dx, dy);
         float h = hash(cell + vSeed * 13.1);
         if (h < 0.9) continue; // une case sur dix porte une paillette
@@ -387,6 +446,7 @@ export function update(dt, time, box, emettre = true) {
 
 const clear = new THREE.Color()
 export function render(renderer, camera) {
+  if (!motifPret) calculerMotif(renderer)
   renderer.getClearColor(clear)
   const alpha = renderer.getClearAlpha()
   renderer.setRenderTarget(target)

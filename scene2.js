@@ -664,7 +664,23 @@ tick()
 
 let imageSale = true, chargee = false
 const camAvant = new THREE.Matrix4(), projAvant = new THREE.Matrix4()
-ready.then(() => setTimeout(() => { chargee = true; imageSale = true }, 3000)) // textures et bakes posés
+// Le train est hors du champ au départ (la caméra regarde le quai) : jamais dessiné, ses shaders et ses textures
+// n'étaient préparés qu'à sa première apparition, d'où un gel quand il sort du tunnel. On le dessine une fois,
+// invisible (image d'un pixel, sans tri par le champ de la caméra), dès le chargement puis une fois tout posé.
+const cibleChauffe = new THREE.WebGLRenderTarget(1, 1)
+function prechauffer() {
+  const coupes = []
+  scene.traverse((o) => { if (o.frustumCulled) { o.frustumCulled = false; coupes.push(o) } })
+  const avant = renderer.getRenderTarget()
+  renderer.setRenderTarget(cibleChauffe)
+  renderer.render(scene, camera)
+  renderer.setRenderTarget(avant)
+  for (const o of coupes) o.frustumCulled = true
+}
+ready.then(() => {
+  prechauffer()
+  setTimeout(() => { prechauffer(); chargee = true; imageSale = true }, 3000) // textures et bakes posés
+})
 function resize() {
   imageSale = true
   renderer.setSize(innerWidth, innerHeight, false)
